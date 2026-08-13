@@ -4,42 +4,28 @@ chcp 65001 >nul
 cd /d "%~dp0"
 title 随心农场 - 游戏服务器
 
+set "PYTHON_EXE=E:\soft\path\anaconda\envs\yolo_v5\python.exe"
+
 echo ========================================================
 echo   随心农场后端一键启动
+echo   Python: %PYTHON_EXE%
 echo ========================================================
 
-set "BOOTSTRAP_PY="
-where python >nul 2>&1
-if not errorlevel 1 set "BOOTSTRAP_PY=python"
-if defined BOOTSTRAP_PY goto :python_ready
-where py >nul 2>&1
-if not errorlevel 1 set "BOOTSTRAP_PY=py -3"
-if defined BOOTSTRAP_PY goto :python_ready
-
-echo [错误] 没有找到 Python 3，请先安装 Python 3.10 或更高版本。
-goto :failed
-
-:python_ready
-if not exist ".venv\Scripts\python.exe" (
-    echo [1/5] 第一次运行：正在创建独立 Python 环境...
-    %BOOTSTRAP_PY% -m venv .venv
-    if errorlevel 1 goto :failed
-) else (
-    echo [1/5] Python 环境已就绪。
+if not exist "%PYTHON_EXE%" (
+    echo [错误] 找不到指定的 Python：
+    echo %PYTHON_EXE%
+    goto :failed
 )
-set "VENV_PY=.venv\Scripts\python.exe"
 
-"%VENV_PY%" -c "import flask, pymysql" >nul 2>&1
+"%PYTHON_EXE%" -c "import flask, pymysql" >nul 2>&1
 if errorlevel 1 (
-    echo [2/5] 第一次运行：正在自动安装后端依赖...
-    "%VENV_PY%" -m pip install --disable-pip-version-check -r requirements.txt
-    if errorlevel 1 goto :failed
-) else (
-    echo [2/5] 后端依赖已安装。
+    echo [错误] 指定的 yolo_v5 环境缺少 Flask 或 PyMySQL。
+    echo 按要求，本脚本不会创建环境，也不会自动安装依赖。
+    goto :failed
 )
 
 if not exist ".env" (
-    echo [3/5] 第一次运行：正在生成本地配置 .env...
+    echo [1/3] 第一次运行：正在生成本地配置 .env...
     (
         echo APP_ENV=development
         echo HOST=0.0.0.0
@@ -59,20 +45,20 @@ if not exist ".env" (
         echo ALLOWED_ORIGINS=http://localhost:7456,http://127.0.0.1:7456
     ) > ".env"
 ) else (
-    echo [3/5] 本地配置已就绪。
+    echo [1/3] 本地配置已就绪。
 )
 
-echo [4/5] 正在检查数据库结构和测试账号...
-"%VENV_PY%" -m app.manage migrate
+echo [2/3] 正在检查数据库结构和测试账号...
+"%PYTHON_EXE%" -m app.manage migrate
 if errorlevel 1 goto :database_failed
-"%VENV_PY%" -m app.manage seed-demo
+"%PYTHON_EXE%" -m app.manage seed-demo
 if errorlevel 1 goto :database_failed
 
-echo [5/5] 启动完成：http://127.0.0.1:8000
+echo [3/3] 启动完成：http://127.0.0.1:8000
 echo 测试账号：test / test12345 / 大区一 · 电信
 echo 关闭此窗口即可停止服务器。
 echo ========================================================
-"%VENV_PY%" run.py
+"%PYTHON_EXE%" run.py
 if errorlevel 1 goto :failed
 goto :end
 

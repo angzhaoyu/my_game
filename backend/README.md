@@ -2,10 +2,13 @@
 
 ## Windows 本地启动：只需双击
 
-准备条件只有两个：
+启动脚本固定使用你指定的解释器：
 
-1. 已安装 Python 3.10 或更高版本；
-2. MySQL 已启动（沿用原项目配置：`root / 123456`）。
+```text
+E:\soft\path\anaconda\envs\yolo_v5\python.exe
+```
+
+请确保该环境已经有 `Flask` 和 `PyMySQL`，并且 MySQL 已启动（沿用原项目配置：`root / 123456`）。脚本不会创建 Conda/venv 环境，也不会执行 pip 安装。
 
 然后直接双击：
 
@@ -15,12 +18,12 @@
 
 第一次双击时脚本会自动完成：
 
-- 创建 `backend/.venv` 独立环境；
-- 安装 `requirements.txt`；
 - 生成本地 `.env`；
 - 创建/升级数据库表；
 - 创建后端测试账号；
 - 启动 `http://127.0.0.1:8000`。
+
+不会创建环境或安装依赖。
 
 以后每次仍然只双击同一个文件。关闭命令窗口即可停止服务器。
 
@@ -59,18 +62,16 @@
 
 ## 维护命令（普通启动不需要手动执行）
 
-```bash
-# 数据库迁移
-.venv/Scripts/python -m app.manage migrate
+```bat
+REM 数据库迁移
+E:\soft\path\anaconda\envs\yolo_v5\python.exe -m app.manage migrate
 
-# 首次创建测试账号；重复执行不会重置已有账号数据
-.venv/Scripts/python -m app.manage seed-demo
+REM 首次创建测试账号；重复执行不会重置已有账号数据
+E:\soft\path\anaconda\envs\yolo_v5\python.exe -m app.manage seed-demo
 
-# 清理 7 天前的幂等记录
-.venv/Scripts/python -m app.manage prune-commands --retention-days 7
+REM 清理 7 天前的幂等记录
+E:\soft\path\anaconda\envs\yolo_v5\python.exe -m app.manage prune-commands --retention-days 7
 ```
-
-macOS/Linux 对应解释器路径为 `.venv/bin/python`。
 
 ## Docker / 生产部署
 
