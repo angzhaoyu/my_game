@@ -44,6 +44,8 @@ npm run typecheck:core
 
 完整 Cocos 脚本还需由真实 Creator 工程编译，因为本仓库没有提交引擎 `cc` 类型与生成资产。
 
+`docs/ci.workflow.yml.example` 提供相同检查的 GitHub Actions 模板。仓库维护者可在具备 `workflows` 权限时将它复制到 `.github/workflows/ci.yml` 以启用自动检查。
+
 ## 节点与资源契约
 
 改 Cocos 节点名/资源路径时，同一个 PR 更新：

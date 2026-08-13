@@ -45,7 +45,8 @@ my_game/
 │   ├── package.json
 │   └── tsconfig.core.json         # 不依赖 cc 的核心模块类型检查
 ├── docs/                           # 架构、API、上线、协作说明
-└── .github/                        # CI、CODEOWNERS、PR 模板
+├── .github/                        # CODEOWNERS、PR 模板
+└── docs/ci.workflow.yml.example   # GitHub Actions 模板（需维护者启用）
 ```
 
 ## 关键边界
