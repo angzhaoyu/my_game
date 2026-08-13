@@ -66,14 +66,21 @@ export class HttpClient {
         }
         const error: ApiErrorBody = envelope?.error || {
           code: response.status === 0 ? 'NETWORK_ERROR' : `HTTP_${response.status}`,
-          message: response.status === 0 ? '网络连接失败' : '服务器响应异常',
+          message: response.status === 0
+            ? `无法连接后端 ${RUNTIME.apiBaseUrl}，请确认游戏服务器已启动`
+            : '服务器响应异常',
           retryable: response.status === 0 || response.status === 408 || response.status === 429 || response.status >= 500,
         };
         throw new ApiError(error.code, error.message, response.status, error.retryable, error.details || {});
       } catch (caught) {
         lastError = caught instanceof ApiError
           ? caught
-          : new ApiError('NETWORK_ERROR', '网络连接失败，请检查网络后重试', 0, true);
+          : new ApiError(
+              'NETWORK_ERROR',
+              `无法连接后端 ${RUNTIME.apiBaseUrl}，请确认游戏服务器已启动`,
+              0,
+              true,
+            );
         if (lastError.status === 401) SessionStore.clear();
         // 版本冲突需要先 bootstrap，原请求原地重试没有意义，由 GameSyncService 处理。
         if (lastError.code === 'VERSION_CONFLICT') throw lastError;

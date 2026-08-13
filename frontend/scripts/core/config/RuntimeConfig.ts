@@ -24,11 +24,12 @@ function injectedConfig(): Partial<RuntimeConfig> {
 
 function defaultBaseUrl(): string {
   const root = globalThis as any;
-  const location = root.location;
-  if (location && /^(localhost|127\.0\.0\.1)$/.test(location.hostname || '')) {
+  // Cocos Creator 的 PreviewInEditor 运行在 Electron/file 协议中，hostname 不是 localhost。
+  // 只要不是微信小游戏环境，就默认连接本机后端，避免错误访问 api.example.com。
+  if (!root.wx || typeof root.wx.request !== 'function') {
     return 'http://127.0.0.1:8000/api/v1';
   }
-  // 上线前必须通过构建配置/ext.json 替换，微信小游戏只允许 HTTPS 合法域名。
+  // 微信真机/开发者工具上线前必须通过 ext 配置注入 HTTPS 合法域名。
   return 'https://api.example.com/api/v1';
 }
 

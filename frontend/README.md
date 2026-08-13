@@ -21,8 +21,8 @@ assets/
 
 1. `wx.getExtConfigSync()`；
 2. `globalThis.__GAME_CONFIG__`；
-3. 本地浏览器默认 `http://127.0.0.1:8000/api/v1`；
-4. 其他环境默认占位地址，并拒绝进入正式微信登录。
+3. Cocos Creator `PreviewInEditor`、Electron 和普通 Web 本地预览默认 `http://127.0.0.1:8000/api/v1`；
+4. 微信环境未配置时使用占位地址，并拒绝进入正式微信登录。
 
 微信开发者工具可使用扩展配置（具体文件由真实 Cocos 构建流程生成/复制）：
 

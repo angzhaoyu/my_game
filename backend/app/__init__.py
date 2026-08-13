@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from urllib.parse import urlsplit
 
 from flask import Flask, g, jsonify, request
 from werkzeug.exceptions import HTTPException
@@ -15,6 +16,19 @@ from .services.auth_service import AuthService, WeChatGateway
 from .services.game_service import GameService
 from .services.token_service import TokenService
 from .settings import Settings
+
+
+def _is_local_preview_origin(origin: str, settings: Settings) -> bool:
+    """仅开发环境允许 Cocos Editor 的 file/null/随机 localhost 预览来源。"""
+    if settings.is_production:
+        return False
+    if origin == "null" or origin.startswith("file://"):
+        return True
+    try:
+        parsed = urlsplit(origin)
+        return parsed.scheme in {"http", "https"} and parsed.hostname in {"localhost", "127.0.0.1"}
+    except ValueError:
+        return False
 
 
 def create_app(settings: Settings | None = None, *, repository=None, wechat=None) -> Flask:
@@ -57,7 +71,8 @@ def create_app(settings: Settings | None = None, *, repository=None, wechat=None
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Cache-Control"] = "no-store"
         origin = request.headers.get("Origin", "").rstrip("/")
-        if origin and origin in settings.allowed_origins:
+        origin_allowed = origin in settings.allowed_origins or _is_local_preview_origin(origin, settings)
+        if origin and origin_allowed:
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Vary"] = "Origin"
             response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-Request-ID"

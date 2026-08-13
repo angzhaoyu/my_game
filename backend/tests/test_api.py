@@ -63,11 +63,21 @@ class ApiTest(unittest.TestCase):
             "/api/v1/public/config",
             headers={"Origin": "https://preview.example"},
         )
+        editor_null = self.client.options(
+            "/api/v1/public/config",
+            headers={"Origin": "null"},
+        )
+        editor_random_port = self.client.options(
+            "/api/v1/public/config",
+            headers={"Origin": "http://localhost:18321"},
+        )
         denied = self.client.options(
             "/api/v1/public/config",
             headers={"Origin": "https://evil.example"},
         )
         self.assertEqual(allowed.headers["Access-Control-Allow-Origin"], "https://preview.example")
+        self.assertEqual(editor_null.headers["Access-Control-Allow-Origin"], "null")
+        self.assertEqual(editor_random_port.headers["Access-Control-Allow-Origin"], "http://localhost:18321")
         self.assertNotIn("Access-Control-Allow-Origin", denied.headers)
 
 
