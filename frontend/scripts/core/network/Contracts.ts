@@ -12,6 +12,10 @@ export interface ApiEnvelope<T> {
   error?: ApiErrorBody;
 }
 
+/**
+ * 前后端玩法命令清单。新增普通玩法时，前端通常只需在这里增加命令名，
+ * UI 继续调用 GameActionHandler；不要为每个玩法重新写 HTTP 请求。
+ */
 export type GameCommandType =
   | 'buy_item'
   | 'sell_item'

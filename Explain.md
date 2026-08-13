@@ -48,6 +48,85 @@ my_game/
 └── docs/ci.workflow.yml.example   # GitHub Actions 模板（需维护者启用）
 ```
 
+## 日常开发怎么分工
+
+文件多不代表每个人都要理解全部文件。日常开发按下面四个区域认领即可：
+
+| 负责人 | 主要目录 | 不需要关心 |
+|---|---|---|
+| UI/交互 | `frontend/scripts/farm/ui/`、场景、资源 | HTTP、MySQL、令牌 |
+| 前端逻辑 | `frontend/scripts/farm/GameRoot.ts`、`frontend/scripts/core/network/Contracts.ts` | SQL、Flask 路由细节 |
+| 后端玩法 | `backend/app/domain/game.py`、`catalog.py`、`backend/tests/` | Cocos 节点和动画 |
+| 后端数据 | `backend/app/domain/models.py`、`repositories/mysql.py`、`migrations/` | Cocos UI |
+
+`frontend/scripts/core/network/HttpClient.ts`、`sync/GameSyncService.ts` 以及后端鉴权、事务基础设施已经封装好。开发普通玩法时不要重复修改这些基础文件。
+
+## 前端新增功能，对应后端怎么增加
+
+### 情况一：普通玩家操作
+
+例如新增“铲除作物”，**不需要新增 API 文件，也不需要新增路由**。所有玩家操作统一走 `/api/v1/game/commands`。
+
+只做四步：
+
+1. 前后端先约定命令：`remove_crop`，参数 `{ plotId: number }`；
+2. 前端在 `frontend/scripts/core/network/Contracts.ts` 的 `GameCommandType` 增加 `'remove_crop'`；
+3. UI 调用已有入口：`this.onAction('remove_crop', { plotId })`；
+4. 后端只在 `backend/app/domain/game.py` 增加 `_handle_remove_crop(...)`，并在 `backend/tests/` 增加测试。
+
+后端方法示意：
+
+```python
+def _handle_remove_crop(self, state, payload, now_ms):
+    plot = self._plot(state, payload)
+    if not plot.crop_id:
+        raise AppError("NO_CROP", "地块上没有作物")
+    plot.crop_id = None
+    plot.progress = 0
+    plot.harvestable = False
+    return ActionResult("作物已铲除")
+```
+
+网络超时、重试、幂等、版本冲突、保存 MySQL 都由现有基础层处理，功能开发者不需要再写一遍。
+
+### 情况二：新增数据字段
+
+例如任务系统需要 `daily_task_count`：
+
+1. 后端数据负责人修改 `domain/models.py`；
+2. 新增一个 `migrations/002_*.sql`；
+3. 在 `repositories/mysql.py` 增加读取和保存；
+4. 玩法负责人在 `domain/game.py` 使用该字段；
+5. 前端只接收后端快照，不自己伪造字段。
+
+只有需要永久保存的新数据才走这一步。不要为纯 UI 动画增加数据库字段。
+
+### 情况三：独立系统
+
+好友、排行榜、邮件这类不属于单个玩家农场命令的系统，才新增独立 API/Service，例如：
+
+```text
+backend/app/api/friends.py
+backend/app/services/friend_service.py
+frontend/scripts/friends/
+```
+
+这类功能应先在 `docs/API.md` 写清请求、响应和错误码，再让前后端并行开发；后端负责人最后在 `app/__init__.py` 注册一次新的 Blueprint。
+
+### 一个功能的协作顺序
+
+```text
+产品/负责人确定命令和参数
+        ↓
+后端实现规则 + 单元测试       前端实现 UI + 调用 onAction
+        ↓                         ↓
+           使用同一命令名联调
+                    ↓
+              弱网/重复点击验收
+```
+
+提交新功能时至少写清：命令名、payload、成功结果、错误码、是否新增数据库字段。这样接手的人只看对应功能文件，不需要从整个项目里寻找调用链。
+
 ## 关键边界
 
 1. **后端权威**：价格、初始背包、金币、经验、成长、收获和土地状态都由后端创建与校验；前端不能上传整包数据覆盖数据库。

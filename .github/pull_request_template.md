@@ -6,6 +6,13 @@
 - [ ] Cocos 逻辑/UI
 - [ ] 微信构建/部署
 
+## 跨端功能契约（纯前端/纯后端改动可写“不适用”）
+- 命令名或 API：
+- payload：
+- 成功结果：
+- 错误码：
+- 是否新增持久化字段：
+
 ## 验证
 - [ ] `PYTHONPATH=backend python -m unittest discover -s backend/tests -v`
 - [ ] `cd frontend && npm run typecheck:core`

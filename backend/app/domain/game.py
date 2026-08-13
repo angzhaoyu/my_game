@@ -24,15 +24,11 @@ MAX_OFFLINE_HOURS = 24 * 30
 
 
 class GameEngine:
-    ALLOWED_COMMANDS = {
-        "buy_item",
-        "sell_item",
-        "develop_plot",
-        "plant",
-        "water",
-        "fertilize",
-        "harvest",
-    }
+    """玩家自己的农场命令。
+
+    新增普通玩法命令时只需要增加一个 ``_handle_<命令名>`` 方法；不需要新增 HTTP 路由。
+    ``execute`` 会把该方法本身当作白名单，避免再维护一份重复的命令列表。
+    """
 
     def advance(self, state: GameAggregate, now_ms: int) -> bool:
         """按服务端时间结算，客户端时间不会参与奖励判定。"""
@@ -55,9 +51,9 @@ class GameEngine:
         return True
 
     def execute(self, state: GameAggregate, command_type: str, payload: Dict[str, Any], now_ms: int) -> ActionResult:
-        if command_type not in self.ALLOWED_COMMANDS:
+        handler = getattr(self, f"_handle_{command_type}", None) if isinstance(command_type, str) else None
+        if not callable(handler):
             raise AppError("UNKNOWN_COMMAND", "不支持的游戏操作")
-        handler = getattr(self, f"_handle_{command_type}")
         return handler(state, payload, now_ms)
 
     def _handle_buy_item(self, state: GameAggregate, payload: Dict[str, Any], now_ms: int) -> ActionResult:

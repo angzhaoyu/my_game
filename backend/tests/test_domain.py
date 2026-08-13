@@ -26,6 +26,11 @@ class DomainTest(unittest.TestCase):
         with self.assertRaises(AppError):
             engine.execute(state, "buy_item", {"itemId": "seed_wheat", "quantity": 0}, HOUR_MS)
 
+    def test_unknown_command_is_rejected(self):
+        with self.assertRaises(AppError) as caught:
+            GameEngine().execute(self.state(), "not_a_real_command", {}, HOUR_MS)
+        self.assertEqual(caught.exception.code, "UNKNOWN_COMMAND")
+
     def test_develop_and_plant_use_authoritative_rules(self):
         state = self.state()
         state.inventory["seed_wheat"] = InventoryEntry("seed_wheat", 1, HOUR_MS)
