@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import sys
 import traceback
+import warnings
 from importlib import import_module
 from pathlib import Path
 
@@ -47,6 +48,7 @@ def write_error_log() -> None:
 
 def main() -> int:
     ensure_local_config()
+    warnings.filterwarnings("ignore", message="Python 3\.8 is no longer supported.*")
     try:
         import_module("flask")
         import_module("pymysql")
@@ -78,7 +80,8 @@ def main() -> int:
     except KeyboardInterrupt:
         return 0
     except Exception:
-        print("[启动失败] 请检查 MySQL 是否启动，以及 backend/.env 中的数据库配置。", flush=True)
+        print("[启动失败] 数据库初始化或服务器启动失败，具体原因如下：", flush=True)
+        traceback.print_exc()
         write_error_log()
         return 1
 

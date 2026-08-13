@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS player_states (
     last_simulated_at_ms BIGINT NOT NULL DEFAULT 0,
     updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     PRIMARY KEY (user_id),
-    CONSTRAINT fk_player_state_user FOREIGN KEY (user_id) REFERENCES accounts(id) ON DELETE CASCADE,
+    CONSTRAINT fk_game_state_account FOREIGN KEY (user_id) REFERENCES accounts(id) ON DELETE CASCADE,
     CONSTRAINT chk_player_non_negative CHECK (coins >= 0 AND diamonds >= 0 AND exp >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS player_farm_plots (
     last_watered_at_ms BIGINT NOT NULL DEFAULT 0,
     updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     PRIMARY KEY (user_id, plot_index),
-    CONSTRAINT fk_farm_plot_user FOREIGN KEY (user_id) REFERENCES accounts(id) ON DELETE CASCADE,
+    CONSTRAINT fk_game_plot_account FOREIGN KEY (user_id) REFERENCES accounts(id) ON DELETE CASCADE,
     CONSTRAINT chk_plot_index CHECK (plot_index BETWEEN 1 AND 24),
     CONSTRAINT chk_plot_water CHECK (water BETWEEN 0 AND 100),
     CONSTRAINT chk_plot_fertilizer CHECK (fertilizer BETWEEN 0 AND 100),
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS player_items (
     count INT UNSIGNED NOT NULL,
     acquired_at_ms BIGINT NOT NULL,
     PRIMARY KEY (user_id, item_id),
-    CONSTRAINT fk_inventory_user FOREIGN KEY (user_id) REFERENCES accounts(id) ON DELETE CASCADE,
+    CONSTRAINT fk_game_item_account FOREIGN KEY (user_id) REFERENCES accounts(id) ON DELETE CASCADE,
     CONSTRAINT chk_inventory_count CHECK (count > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -70,5 +70,5 @@ CREATE TABLE IF NOT EXISTS processed_commands (
     created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     PRIMARY KEY (user_id, command_id),
     KEY idx_processed_commands_created (created_at),
-    CONSTRAINT fk_command_user FOREIGN KEY (user_id) REFERENCES accounts(id) ON DELETE CASCADE
+    CONSTRAINT fk_game_command_account FOREIGN KEY (user_id) REFERENCES accounts(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

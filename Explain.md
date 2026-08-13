@@ -20,7 +20,7 @@ my_game/
 │   ├── migrations/                # 可审查、可追踪的 SQL 迁移
 │   ├── tests/                     # 不依赖 MySQL 的自动测试
 │   ├── 启动游戏服务器.bat          # Windows 一键启动（普通开发只用它）
-│   ├── run.py                     # bat 调用的本地启动入口
+│   ├── server.py                  # 唯一本地入口：自动建库/迁移并启动
 │   ├── compose.yaml               # Docker 部署方式
 │   └── Dockerfile
 ├── frontend/

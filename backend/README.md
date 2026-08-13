@@ -23,7 +23,7 @@ E:\soft\path\anaconda\envs\yolo_v5\python.exe
 - 创建后端测试账号；
 - 启动 `http://127.0.0.1:8000`。
 
-不会创建环境或安装依赖。
+不会创建环境或安装依赖。`server.py` 会像最初版本一样自动连接 MySQL、创建数据库和表，不需要手动执行 SQL 命令；Windows 的 MySQL 服务本身需处于运行状态（通常安装后会自动启动）。
 
 以后每次仍然只双击同一个文件。关闭命令窗口即可停止服务器。即使启动失败，窗口也会停在 `pause`，并把 Python 详细异常写入 `backend/启动错误.log`，不会再一闪而过。
 
@@ -38,7 +38,7 @@ E:\soft\path\anaconda\envs\yolo_v5\python.exe
 | 文件/目录 | 唯一职责 |
 |---|---|
 | `启动游戏服务器.bat` | Windows 本地一键初始化并启动 |
-| `run.py` | 被 bat 调用的本地 Flask 启动入口 |
+| `server.py` | bat 调用的唯一 Python 入口；自动建库/迁移、测试账号并启动 Flask |
 | `app/__init__.py` | 创建并装配 Flask 应用 |
 | `app/api/` | HTTP 路由与鉴权边界 |
 | `app/domain/` | 游戏规则、模型和服务端配置 |
