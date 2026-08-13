@@ -1,3 +1,7 @@
+# farm 场景节点契约
+
+> `GameRoot` 将服务端快照投影到这些节点。商店/背包/地块 UI 只能发送语义命令，禁止直接修改金币后整包保存。新场景优先用 `@property` 拖拽绑定，节点名查找仅用于兼容。
+
 Canvas  挂载了GameRoot.ts
 ├─bg_ground  Sprite  背景图片。
 ├─Camera  相机。

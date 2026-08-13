@@ -7,6 +7,7 @@ import { PlayerModel } from '../data/PlayerModel';
 import type { ShopDef } from '../data/ItemData';
 import { SHOP_ITEMS } from '../config/ItemConfig';
 import { ShopItem } from './ShopItem';
+import type { GameActionHandler } from '../GameAction';
 
 const { ccclass } = _decorator;
 
@@ -18,11 +19,11 @@ const C_TEXT_D  = new Color(58, 42, 18, 255);
 export class ShopPanel extends Component {
   inventory!: InventoryModel;
   player!: PlayerModel;
-  onGoldChanged: (gold: number) => void = () => {};
   onToast: (msg: string, duration?: number) => void = () => {};
-  onChanged: () => void = () => {};
+  onAction: GameActionHandler = async () => ({ ok: false, message: '网络服务尚未就绪' });
 
   private panelNode: Node | null = null;
+  private pendingItems = new Set<string>();
   private scrollView: ScrollView | null = null;
   private contentNode: Node | null = null;
   private goldLabel: Label | null = null;
@@ -156,7 +157,7 @@ export class ShopPanel extends Component {
       if (i < list.length) {
         child.active = true;
         let si = child.getComponent(ShopItem) || child.addComponent(ShopItem);
-        si.init(list[i], this.player.gold >= list[i].price, (d) => this.buy(d));
+        si.init(list[i], this.player.gold >= list[i].price && !this.pendingItems.has(list[i].id), (d) => { void this.buy(d); });
       } else {
         child.active = false;
       }
@@ -170,7 +171,7 @@ export class ShopPanel extends Component {
       const item = template.clone();
       item.active = true;
       const si = item.getComponent(ShopItem) || item.addComponent(ShopItem);
-      si.init(def, this.player.gold >= def.price, (d) => this.buy(d));
+      si.init(def, this.player.gold >= def.price && !this.pendingItems.has(def.id), (d) => { void this.buy(d); });
       this.contentNode.addChild(item);
     }
 
@@ -209,15 +210,17 @@ export class ShopPanel extends Component {
     });
   }
 
-  private buy(def: ShopDef) {
-    if (!this.player.spend(def.price)) {
-      this.onToast('金币子足 💰');
-      return;
-    }
-    this.inventory.addItem(def, 1);
-    this.onGoldChanged(this.player.gold);
-    this.onToast(`-${def.price} 💰 购买 ${def.name}`);
+  private async buy(def: ShopDef) {
+    if (this.pendingItems.has(def.id)) return;
+    if (this.player.gold < def.price) { this.onToast('金币不足 💰'); return; }
+    this.pendingItems.add(def.id);
     this.render();
-    this.onChanged();
+    try {
+      const result = await this.onAction('buy_item', { itemId: def.id, quantity: 1 });
+      this.onToast(result.message);
+    } finally {
+      this.pendingItems.delete(def.id);
+      this.render();
+    }
   }
 }

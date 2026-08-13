@@ -18,6 +18,8 @@ import { FarmModel } from '../data/FarmModel';
 import { InventoryModel } from '../data/InventoryModel';
 import { PlayerModel } from '../data/PlayerModel';
 import { FarmPicker } from './FarmPicker';
+import type { GameActionHandler } from '../GameAction';
+import type { GameCommandType } from '../../core/network/Contracts';
 
 const { ccclass } = _decorator;
 
@@ -30,11 +32,11 @@ export class LandView extends Component {
   inventory!: InventoryModel;
 
   onToast: (msg: string, dur?: number) => void = () => {};
-  onGoldChanged: (g: number) => void = () => {};
-  onExpChanged: (lv: number) => void = () => {};
-  onPersist: () => void = () => {};
+  onAction: GameActionHandler = async () => ({ ok: false, message: '网络服务尚未就绪' });
+  now: () => number = () => Date.now();
 
   private plots: { id: number; node: Node; land: Sprite | null; cropNode: Node; cropSprite: Sprite | null }[] = [];
+  private busyPlots = new Set<number>();
   private picker: FarmPicker | null = null;
   private lastKeys: Record<number, string> = {};
 
@@ -57,7 +59,7 @@ export class LandView extends Component {
 
   update() {
     if (!this.farm) return;
-    this.farm.updateModel(Date.now());
+    this.farm.updateModel(this.now());
     this.render();
   }
 
@@ -115,6 +117,7 @@ export class LandView extends Component {
   // ---------- 交互 ----------
 
   private onPlotTouch(p: { id: number; node: Node }) {
+    if (this.busyPlots.has(p.id)) { this.onToast('操作正在同步，请稍候'); return; }
     const plot = this.farm.getPlot(p.id);
     if (!plot || !plot.developed) { this.tryDevelop(p.id); return; }
 
@@ -128,102 +131,90 @@ export class LandView extends Component {
     this.openSeedPicker(p.id);
   }
 
-  private tryDevelop(id: number) {
-    const cost = LAND.DEVELOP_COST;
-    if (!this.player.spend(cost)) { this.onToast('金币不足 💰，无法开发土地'); return; }
-    this.farm.develop(id);
-    this.onGoldChanged(this.player.gold);
-    this.onToast(`开发土地 -${cost} 💰`);
-    this.onPersist();
-    this.render();
+  private async tryDevelop(id: number) {
+    if (this.player.gold < LAND.DEVELOP_COST) {
+      this.onToast('金币不足 💰，无法开发土地');
+      return;
+    }
+    const result = await this.perform(id, 'develop_plot', { plotId: id });
+    if (result.ok) this.onToast(result.message);
   }
 
   private openSeedPicker(id: number) {
-    if (!this.picker) return;
+    if (!this.picker || this.busyPlots.has(id)) return;
     const opts = this.seedOptions();
     if (opts.length === 0) { this.onToast('背包里没有种子，去商店买吧 🌱'); return; }
-    this.picker.open('选择种子', opts, (key) => this.doPlant(id, key));
+    this.picker.open('选择种子', opts, (key) => { void this.doPlant(id, key); });
   }
 
   private seedOptions(): (import('./FarmPicker').PickerOption & { key: string })[] {
     const seeds = this.inventory.query({ category: 'seed' });
     const out: (import('./FarmPicker').PickerOption & { key: string })[] = [];
-    for (const s of seeds) {
-      // 种子物品 icon 为 seed_wheat 等，据此映射到作物 id
-      const cropId = (s.icon || '').replace(/^seed_/, '');
+    for (const seed of seeds) {
+      const cropId = (seed.icon || '').replace(/^seed_/, '');
       const def = getCropDef(cropId);
-      if (!def) continue;
-      out.push({ key: def.id, name: def.name, icon: s.icon, sub: `x${s.count}` });
+      if (def) out.push({ key: def.id, name: def.name, icon: seed.icon, sub: `x${seed.count}` });
     }
     return out;
   }
 
-  private doPlant(id: number, cropId: string) {
-    const seed = this.inventory.getAll().find(s => s.icon === `seed_${cropId}`);
-    if (!seed || seed.count <= 0) { this.onToast('没有该种子了'); return; }
-    if (!this.farm.plant(id, cropId, this.player.level)) { this.onToast('这块地还不能种'); return; }
-    this.inventory.sellOne(seed.id); // 消耗一个种子（复用数量扣减逻辑）
-    this.onPersist();
-    this.render();
-    const def = getCropDef(cropId);
-    this.onToast(`种下了${def?.name ?? ''} 🌱，记得浇水施肥`);
+  private async doPlant(id: number, cropId: string) {
+    const result = await this.perform(id, 'plant', { plotId: id, cropId });
+    if (result.ok) this.onToast(`${result.message} 🌱，记得浇水施肥`);
   }
 
-  private tryWater(id: number) {
-    const now = Date.now();
-    if (now < this.waterCooldown) return;
+  private async tryWater(id: number) {
+    const now = this.now();
+    if (now < this.waterCooldown || this.busyPlots.has(id)) return;
     this.waterCooldown = now + LAND.WATER_COOLDOWN_MS;
-
-    if (!this.farm.water(id)) { this.onToast('这块地不能浇水'); return; }
-    const p = this.farm.getPlot(id);
-    this.animateWater(p?.id ?? id, LAND.WATER_PER_USE);
-    this.onPersist();
-    this.render();
+    const result = await this.perform(id, 'water', { plotId: id });
+    if (result.ok) {
+      this.animateWater(id, LAND.WATER_PER_USE);
+      this.onToast(result.message);
+    }
   }
 
   private openFertilizer(id: number) {
-    if (!this.picker) return;
+    if (!this.picker || this.busyPlots.has(id)) return;
     const opts = this.fertilizerOptions();
     if (opts.length === 0) { this.onToast('背包里没有化肥，去商店买吧 🧪'); return; }
-    this.picker.open('选择化肥', opts, (key) => this.doFertilize(id, key));
+    this.picker.open('选择化肥', opts, (key) => { void this.doFertilize(id, key); });
   }
 
   private fertilizerOptions(): (import('./FarmPicker').PickerOption & { key: string })[] {
-    const fers = this.inventory.query({ category: 'fert' });
-    return fers.map(s => ({
-      key: s.id,
-      name: s.name,
-      icon: s.icon,
-      sub: `+${fertAmountFor(s.icon)} 养分`,
+    return this.inventory.query({ category: 'fert' }).map(item => ({
+      key: item.id,
+      name: item.name,
+      icon: item.icon,
+      sub: `+${fertAmountFor(item.icon)} 养分`,
     }));
   }
 
-  private doFertilize(id: number, fertItemId: string) {
-    const item = this.inventory.getAll().find(s => s.id === fertItemId);
-    if (!item || item.count <= 0) { this.onToast('没有该化肥了'); return; }
-    const amount = fertAmountFor(item.icon);
-    if (!this.farm.fertilize(id, amount)) { this.onToast('这块地不能施肥'); return; }
-    this.inventory.sellOne(fertItemId);
-    this.animateFert(id, amount);
-    this.onPersist();
-    this.render();
+  private async doFertilize(id: number, itemId: string) {
+    const item = this.inventory.findByItemId(itemId);
+    const amount = item ? fertAmountFor(item.icon) : 0;
+    const result = await this.perform(id, 'fertilize', { plotId: id, itemId });
+    if (result.ok) {
+      this.animateFert(id, amount);
+      this.onToast(result.message);
+    }
   }
 
-  private tryHarvest(id: number) {
-    const value = this.farm.harvest(id);
-    if (value <= 0) { this.onToast('还没成熟哦'); return; }
-    this.player.addGold(value);
-    this.onGoldChanged(this.player.gold);
+  private async tryHarvest(id: number) {
+    const result = await this.perform(id, 'harvest', { plotId: id });
+    if (result.ok) this.onToast(result.message, 2.2);
+  }
 
-    const leveled = this.player.addExp(Math.ceil(value / 2));
-    this.onExpChanged(this.player.level);
-    if (leveled > 0) {
-      this.onToast(`🎉 升到 ${this.player.level} 级！金币 +${value}`, 2.2);
-    } else {
-      this.onToast(`收获 +${value} 💰`);
+  private async perform(id: number, type: GameCommandType, payload: Record<string, unknown>) {
+    if (this.busyPlots.has(id)) return { ok: false, message: '操作正在同步' };
+    this.busyPlots.add(id);
+    try {
+      const result = await this.onAction(type, payload);
+      if (!result.ok) this.onToast(result.message, 2);
+      return result;
+    } finally {
+      this.busyPlots.delete(id);
     }
-    this.onPersist();
-    this.render();
   }
 
   private showCropStatus(plot: PlotData) {
