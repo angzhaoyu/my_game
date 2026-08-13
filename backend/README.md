@@ -29,7 +29,7 @@ E:\soft\path\anaconda\envs\yolo_v5\python.exe
 
 测试账号：`test / test12345 / 大区一 · 电信`。
 
-如果你的 MySQL 密码不是 `123456`，只需要第一次失败后修改 `backend/.env` 中的 `DB_PASSWORD`，以后仍然直接双击。
+如果旧 `.env` 仍是示例账号 `game/change-me`，而 MySQL 返回 1045，`server.py` 会自动恢复为原项目的 `root/123456` 并写回 `.env`。如果你的 root 密码也不是 `123456`，再修改 `backend/.env` 中的 `DB_PASSWORD`。
 
 ## 后端文件是否有重复功能？
 

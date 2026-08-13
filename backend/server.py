@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 import traceback
 import warnings
@@ -46,6 +47,27 @@ def write_error_log() -> None:
     print(f"详细错误已保存到：{ERROR_LOG}", flush=True)
 
 
+def save_local_database_credentials(username: str, password: str) -> None:
+    """修复早期 .env.example 留下的 game/change-me，本地启动无需手工改文件。"""
+    values = {"DB_USER": username, "DB_PASSWORD": password}
+    lines = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.exists() else []
+    found = set()
+    output = []
+    for line in lines:
+        key = line.split("=", 1)[0].strip() if "=" in line else ""
+        if key in values:
+            output.append(f"{key}={values[key]}")
+            found.add(key)
+        else:
+            output.append(line)
+    for key, value in values.items():
+        if key not in found:
+            output.append(f"{key}={value}")
+    ENV_FILE.write_text("\n".join(output) + "\n", encoding="utf-8")
+    # Settings.from_env 以真实环境变量为优先级，因此本进程也要同步更新。
+    os.environ.update(values)
+
+
 def main() -> int:
     ensure_local_config()
     warnings.filterwarnings("ignore", message="Python 3\.8 is no longer supported.*")
@@ -67,9 +89,28 @@ def main() -> int:
         repository = MySQLRepository(settings)
 
         print("[2/3] 正在检查数据库结构和测试账号...", flush=True)
-        migrate(repository, settings)
-        seed_demo(repository, settings)
+        try:
+            migrate(repository, settings)
+        except Exception as database_error:
+            error_code = database_error.args[0] if getattr(database_error, "args", None) else None
+            can_use_legacy = (
+                error_code == 1045
+                and not settings.is_production
+                and (settings.db_user, settings.db_password) != ("root", "123456")
+            )
+            if not can_use_legacy:
+                raise
+            print(
+                f"检测到 MySQL 拒绝账号 {settings.db_user!r}，"
+                "正在自动恢复原项目账号 root / 123456...",
+                flush=True,
+            )
+            save_local_database_credentials("root", "123456")
+            settings = Settings.from_env()
+            repository = MySQLRepository(settings)
+            migrate(repository, settings)
 
+        seed_demo(repository, settings)
         app = create_app(settings, repository=repository)
         ERROR_LOG.unlink(missing_ok=True)
         print("[3/3] 游戏服务器启动完成：http://127.0.0.1:8000", flush=True)
