@@ -1,0 +1,11 @@
+# VS Code
+.vscode/
+
+# Node / frontend tool output
+node_modules/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
