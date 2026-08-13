@@ -63,14 +63,15 @@ def seed_demo(repository: MySQLRepository, settings: Settings) -> None:
         raise RuntimeError("演示数据已禁用；仅在非生产环境设置 ALLOW_DEMO_SEED=true")
     username, password = "test", "test12345"
     existing = repository.find_user_by_username(username)
-    now_ms = int(time.time() * 1000)
     if existing:
-        user_id = int(existing["id"])
-    else:
-        user = repository.create_password_user(
-            username, hash_password(password), "大区一 · 电信", now_ms, display_name="测试农场主"
-        )
-        user_id = int(user["id"])
+        print("demo account already exists: test / test12345 / 大区一 · 电信")
+        return
+
+    now_ms = int(time.time() * 1000)
+    user = repository.create_password_user(
+        username, hash_password(password), "大区一 · 电信", now_ms, display_name="测试农场主"
+    )
+    user_id = int(user["id"])
     repository.grant_demo_items(
         user_id,
         {
@@ -82,7 +83,6 @@ def seed_demo(repository: MySQLRepository, settings: Settings) -> None:
         },
         coins=5_000,
         now_ms=now_ms,
-        password_hash=hash_password(password),
     )
     print("demo account ready: test / test12345 / 大区一 · 电信")
 

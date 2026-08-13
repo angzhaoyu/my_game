@@ -313,21 +313,11 @@ class MySQLRepository:
         finally:
             conn.close()
 
-    def grant_demo_items(
-        self,
-        user_id: int,
-        items: Dict[str, int],
-        coins: int,
-        now_ms: int,
-        *,
-        password_hash: str | None = None,
-    ) -> None:
+    def grant_demo_items(self, user_id: int, items: Dict[str, int], coins: int, now_ms: int) -> None:
         conn = self.connect()
         try:
             conn.begin()
             with conn.cursor() as cur:
-                if password_hash:
-                    cur.execute("UPDATE accounts SET password_hash=%s WHERE id=%s", (password_hash, user_id))
                 cur.execute("UPDATE player_states SET coins=%s WHERE user_id=%s", (coins, user_id))
                 for item_id, count in items.items():
                     if item_id not in ITEMS:

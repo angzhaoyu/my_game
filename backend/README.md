@@ -1,85 +1,89 @@
-# 后端服务
+# 后端说明
 
-## 设计原则
+## Windows 本地启动：只需双击
 
-- MySQL 保存玩家权威状态；一次命令中的金币、背包和土地修改处于同一事务。
-- API 从 Bearer token 获取用户 ID，不接受客户端指定其他 `user_id`。
-- 写操作使用 `commandId` 去重，并要求 `expectedVersion`，解决超时重试与多设备并发。
-- 游戏目录在 `app/domain/catalog.py`，初始物品也由服务端创建。
-- 应用启动不偷偷建表/写 demo；迁移与测试数据是显式管理命令。
-- 新表使用 `accounts/player_states/player_farm_plots/player_items`；旧原型的 `users/farm_plots/player_inventory` 不再读写，避免直接启动时误覆盖旧测试库。
+准备条件只有两个：
 
-## 环境变量
+1. 已安装 Python 3.10 或更高版本；
+2. MySQL 已启动（沿用原项目配置：`root / 123456`）。
 
-本地可复制 `.env.example` 为 `.env`，服务会读取它，但真实环境变量优先。生产不要把 `.env` 打进镜像，应由容器编排/密钥管理服务注入。
+然后直接双击：
 
-| 名称 | 用途 | 生产要求 |
-|---|---|---|
-| `APP_ENV` | `development` / `production` | `production` |
-| `APP_SECRET` | access token HMAC 密钥 | 至少 32 位随机值 |
-| `DB_*` | MySQL 连接 | 独立低权限账号 |
-| `WECHAT_APP_ID` | 小游戏 AppID | 必填 |
-| `WECHAT_APP_SECRET` | 小游戏 Secret | 必填且不可进 Git/客户端 |
-| `ENABLE_PASSWORD_AUTH` | 本地账号接口 | 生产必须 `false` |
-| `ALLOW_DEMO_SEED` | demo seed 开关 | 生产必须 `false` |
-| `ALLOWED_ORIGINS` | Cocos Web 预览 CORS 白名单 | 不要使用 `*` |
+```text
+启动游戏服务器.bat
+```
 
-`Settings.validate()` 会拒绝明显不安全的生产配置。
+第一次双击时脚本会自动完成：
 
-如果旧原型库里有需要保留的真实玩家数据，请先备份并单独编写一次性校验迁移；不要把旧的客户端整包数据直接复制为权威资产。纯测试数据直接运行 `seed-demo` 重建。
+- 创建 `backend/.venv` 独立环境；
+- 安装 `requirements.txt`；
+- 生成本地 `.env`；
+- 创建/升级数据库表；
+- 创建后端测试账号；
+- 启动 `http://127.0.0.1:8000`。
 
-## 本地方式 A：Docker
+以后每次仍然只双击同一个文件。关闭命令窗口即可停止服务器。
+
+测试账号：`test / test12345 / 大区一 · 电信`。
+
+如果你的 MySQL 密码不是 `123456`，只需要第一次失败后修改 `backend/.env` 中的 `DB_PASSWORD`，以后仍然直接双击。
+
+## 后端文件是否有重复功能？
+
+已再次合并和清理：删除了重复的 `factory.py`、`wsgi.py`，应用工厂统一放在 `app/__init__.py`。当前入口和目录各自只有一个职责：
+
+| 文件/目录 | 唯一职责 |
+|---|---|
+| `启动游戏服务器.bat` | Windows 本地一键初始化并启动 |
+| `run.py` | 被 bat 调用的本地 Flask 启动入口 |
+| `app/__init__.py` | 创建并装配 Flask 应用 |
+| `app/api/` | HTTP 路由与鉴权边界 |
+| `app/domain/` | 游戏规则、模型和服务端配置 |
+| `app/services/` | 登录、bootstrap、幂等命令用例 |
+| `app/repositories/` | MySQL 查询和事务 |
+| `app/manage.py` | 数据库迁移、首次测试账号、定期清理 |
+| `migrations/` | 有版本的数据库结构 |
+| `tests/` | 自动测试，不参与运行 |
+| `Dockerfile` / `compose.yaml` | 部署或 Docker 开发，不是 Windows 本地入口 |
+| `requirements-dev.txt` | 只比正式依赖多测试工具 |
+
+`api/auth.py`、`api/game.py`、`api/health.py` 看起来相似，但分别负责登录、游戏和健康检查，并非重复实现。
+
+## 数据规则
+
+- MySQL 是玩家金币、背包和农场的权威来源；
+- 客户端不能提交整包数据覆盖数据库；
+- 每个写操作使用 `commandId + stateVersion` 防重复扣款和多设备覆盖；
+- 游戏配置和测试数据由后端创建；
+- 旧原型表 `users/farm_plots/player_inventory` 不再读写，新表使用 `accounts/player_states/player_farm_plots/player_items`。
+
+## 维护命令（普通启动不需要手动执行）
+
+```bash
+# 数据库迁移
+.venv/Scripts/python -m app.manage migrate
+
+# 首次创建测试账号；重复执行不会重置已有账号数据
+.venv/Scripts/python -m app.manage seed-demo
+
+# 清理 7 天前的幂等记录
+.venv/Scripts/python -m app.manage prune-commands --retention-days 7
+```
+
+macOS/Linux 对应解释器路径为 `.venv/bin/python`。
+
+## Docker / 生产部署
+
+这部分是部署人员使用的，不影响本地双击启动：
 
 ```bash
 docker compose up -d --build
-docker compose exec api python -m app.manage seed-demo
-curl http://localhost:8000/api/v1/health/ready
 ```
 
-## 本地方式 B：Python + MySQL 8
+生产使用 Gunicorn：
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate            # Windows 使用 .venv\Scripts\activate
-pip install -r requirements-dev.txt
-cp .env.example .env                # 修改数据库密码等
-python -m app.manage migrate
-python -m app.manage seed-demo
-python run.py
+gunicorn --bind 0.0.0.0:8000 --workers 2 --threads 4 --timeout 30 'app:create_app()'
 ```
 
-正式服务使用：
-
-```bash
-gunicorn --bind 0.0.0.0:8000 --workers 2 --threads 4 --timeout 30 wsgi:app
-```
-
-生产不要使用 Flask 自带服务器，也不要在每个 API 实例启动时并发执行迁移；迁移应是部署流水线的独立步骤。
-
-## 测试
-
-领域/应用测试使用内存 fake，无需 MySQL；API 契约测试需要先安装 `requirements-dev.txt`：
-
-```bash
-cd ..
-PYTHONPATH=backend python -m unittest discover -s backend/tests -v
-python -m compileall -q backend/app backend/tests
-```
-
-上线流水线还应增加 MySQL 集成测试（迁移、事务锁和约束）及压测。
-
-## 新增功能放在哪里
-
-- 新作物/价格/初始物品：`app/domain/catalog.py`，同时提升 `CATALOG_VERSION`；
-- 新操作：`GameEngine.ALLOWED_COMMANDS` + `_handle_*`，再扩展 API 文档和测试；
-- 新表：只新增 `migrations/NNN_name.sql`，不要运行时 `ALTER TABLE`；
-- 微信/第三方服务：放 `services` 的 gateway，不要写进 API route；
-- SQL：只放 `repositories`，领域模块不得 import PyMySQL/Flask。
-
-## 运维建议
-
-- `GET /api/v1/health/live` 只检查进程；`ready` 检查 MySQL。
-- 每日执行 `python -m app.manage prune-commands --retention-days 7` 并监控幂等表增长。
-- 在 API 网关按 IP/openid 做登录和命令限流；多实例不要使用进程内限流器。
-- MySQL 使用 UTC、自动备份、时间点恢复和主从/云高可用。
-- 日志中的 `X-Request-ID` 可与客户端错误对应；不要记录 token、wx code 或密码。
+生产环境必须设置真实 `APP_SECRET`、`DB_*`、`WECHAT_APP_ID/WECHAT_APP_SECRET`，并关闭 `ENABLE_PASSWORD_AUTH` 与 `ALLOW_DEMO_SEED`。完整上线清单见 `../docs/WECHAT_RELEASE.md`。

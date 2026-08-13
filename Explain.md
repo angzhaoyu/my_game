@@ -14,16 +14,15 @@ my_game/
 │   │   ├── domain/                # 纯领域：农场规则、目录、模型、错误
 │   │   ├── services/              # 用例：登录、bootstrap、幂等命令
 │   │   ├── repositories/          # MySQL 适配器与事务
-│   │   ├── factory.py             # Flask 应用工厂
+│   │   ├── __init__.py            # 唯一 Flask 应用工厂
 │   │   ├── manage.py              # migrate / seed-demo
-│   │   └── settings.py            # 仅从环境变量读取配置
+│   │   └── settings.py            # 环境配置
 │   ├── migrations/                # 可审查、可追踪的 SQL 迁移
-│   ├── tests/                     # 不依赖 MySQL 的领域/应用单元测试
-│   ├── compose.yaml               # 本地 API + MySQL
-│   ├── Dockerfile
-│   ├── requirements*.txt
-│   ├── run.py                     # 本地开发入口
-│   └── wsgi.py                    # 生产 WSGI 入口
+│   ├── tests/                     # 不依赖 MySQL 的自动测试
+│   ├── 启动游戏服务器.bat          # Windows 一键启动（普通开发只用它）
+│   ├── run.py                     # bat 调用的本地启动入口
+│   ├── compose.yaml               # Docker 部署方式
+│   └── Dockerfile
 ├── frontend/
 │   ├── scripts/
 │   │   ├── core/                  # 与 Cocos 解耦的客户端基础设施

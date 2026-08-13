@@ -41,6 +41,11 @@ class ApiTest(unittest.TestCase):
         cls.app.testing = True
         cls.client = cls.app.test_client()
 
+    def test_root_confirms_server_is_running(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("运行正常", response.json["message"])
+
     def test_health_and_request_id(self):
         response = self.client.get("/api/v1/health/live", headers={"X-Request-ID": "test-request-1"})
         self.assertEqual(response.status_code, 200)

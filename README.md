@@ -6,28 +6,17 @@
 
 ### 1. 启动后端
 
-```bash
-cd backend
-docker compose up -d --build
-# 首次需要测试账号时：
-docker compose exec api python -m app.manage seed-demo
+Windows 本地开发直接双击：
+
+```text
+backend/启动游戏服务器.bat
 ```
 
-测试账号：`test / test12345 / 大区一 · 电信`。该账号只由后端 seed 命令创建，不存在客户端测试背包。
+首次运行会自动创建 Python 环境、安装依赖、生成配置、迁移数据库和创建测试账号；以后仍然只双击该文件。默认沿用原项目 MySQL 配置 `root / 123456`，密码不同时修改一次 `backend/.env` 即可。
 
-不用 Docker 时请先准备 MySQL 8：
+测试账号：`test / test12345 / 大区一 · 电信`。测试数据由后端创建，不存在客户端测试背包。
 
-```bash
-cd backend
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# macOS/Linux: source .venv/bin/activate
-pip install -r requirements-dev.txt
-cp .env.example .env   # Windows 可使用 copy .env.example .env，然后修改
-python -m app.manage migrate
-python -m app.manage seed-demo
-python run.py
-```
+Docker 和生产启动属于部署方式，见 [backend/README.md](backend/README.md)，普通本地开发不需要执行那些命令。
 
 ### 2. 检查
 
