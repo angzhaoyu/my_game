@@ -1,15 +1,27 @@
+# farm 场景节点契约
+
+> `GameRoot` 将服务端快照投影到这些节点。商店/背包/地块 UI 只能发送语义命令，禁止直接修改金币后整包保存。新场景优先用 `@property` 拖拽绑定，节点名查找仅用于兼容。
+>
+> 四种工具动画和光标的详细配置见 [`tool-effects.setup.md`](tool-effects.setup.md)。
+
 Canvas  挂载了GameRoot.ts
 ├─bg_ground  Sprite  背景图片。
 ├─Camera  相机。
   ├─lands Node  地地节点。下面的1234都是一个结构。
-    ├─lands_1 Node  
+    ├─lands_1 Node
       └─1~6 Sprite *6  地地图片，一共有6个图片。
-    ├─lands_2 Node   
-    ├─lands_3 Node  
-    └─lands_4 Node  
+    ├─lands_2 Node
+    ├─lands_3 Node
+    └─lands_4 Node
+
+  ├─ToolEffectLayer Node  工具动画层；Sibling 必须在 lands 之后。
+    ├─WaterEffectTemplate Node  默认 inactive；Sprite + Animation。
+    ├─FertilizerEffectTemplate Node  默认 inactive；Sprite + Animation。
+    ├─HarvestEffectTemplate Node  默认 inactive；Sprite + Animation。
+    └─ShovelEffectTemplate Node  默认 inactive；Sprite + Animation。
 
   ├─TopBar Node  存储着玩家信息。
-    └─ PlayerInfoSection  
+    └─ PlayerInfoSection
         ├─ ExpBar  Sprite
            ├─ Bar  Sprite   经验条进度条
            └─ LevelLabel  等级，例如Lv.8
@@ -36,16 +48,19 @@ Canvas  挂载了GameRoot.ts
     ├─ BackpackBtn  Node  背包按钮节点。
        ├─ BackpackBtn
        └─ Bag
-    ├─ Water  浇水。 这个和后面的按钮我暂没有实现。
-    ├─ Shovel  挖掘。
-    ├─ Harvest  收获。
-    ├─ Fertilizer  肥料。
+    ├─ Water  浇水工具按钮；绑定 water 模式。
+    ├─ Shovel  铲子工具按钮；铲除地块上的作物，不返还种子。
+    ├─ Harvest  采摘工具按钮；只处理已经成熟的作物。
+    ├─ Fertilizer  施肥工具按钮；点击地块后选择背包化肥。
     ├─ expand  Button  展开按钮。
     └─ collapse  Button  收起按钮。
 
   ├─RightBar Node  右侧栏节点。
     ├─ BgSprite  Sprite  右侧栏背景
     └─ Friend  Node  好友节点。还未实现。
+
+  ├─ToolCursorLayer Node  工具光标层；放在普通 HUD 之后、弹窗之前。
+    └─ToolCursor Node  运行时由 LandView 自动生成，无需手工创建。
 
   ├─Toast Node  提示节点。挂载了Toast.ts。
     └─ ToastLabel  Label  提示标签。
@@ -86,7 +101,7 @@ Canvas  挂载了GameRoot.ts
 
 
 以下是预制体。
-CellItem  
+CellItem
 ├─ cell_bg  Sprite  单元格背景
 ├─ icon  Sprite  物品图标
 ├─ lb_name  Label  物品名称

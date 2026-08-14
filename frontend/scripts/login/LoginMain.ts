@@ -4,7 +4,9 @@
 // ============================================================
 
 import { _decorator, Button, Color, Component, director, EditBox, Graphics, Label, Layers, Node, ResolutionPolicy, sys, UITransform, view } from 'cc';
-import { Http, SERVER, LOGIN_UID_KEY, LOGIN_NAME_KEY } from './Net';
+import { authApi } from '../core/auth/AuthApi';
+import { SessionStore } from '../core/auth/SessionStore';
+import { ApiError } from '../core/network/HttpClient';
 
 const { ccclass } = _decorator;
 
@@ -143,10 +145,15 @@ export class LoginMain extends Component {
 
     private rememberLabel!: Label;
     private rememberOn = true;
+    private authenticating = false;
 
     private toast!: Label;
 
     onLoad() {
+        if (SessionStore.get()) {
+            director.loadScene(LoginMain.FARM_SCENE);
+            return;
+        }
         view.setDesignResolutionSize(DESIGN_W, DESIGN_H, ResolutionPolicy.FIXED_HEIGHT);
 
         this.buildBackground();
@@ -159,12 +166,17 @@ export class LoginMain extends Component {
         this.showPage(this.pageLogin);
         this.loadRemember();
 
-        Http.get(SERVER.baseUrl + '/api/regions', (code, data) => {
-            if (data && data.success && data.regions && data.regions.length > 0) {
-                this.regions = data.regions;
+        void authApi.regions().then((regions) => {
+            if (regions.length > 0) {
+                this.regions = regions;
+                if (!regions.includes(this.region)) this.region = regions[0];
                 this.refreshRegionLabel();
             }
-        });
+        }).catch((error) => console.warn('[Login] 获取大区失败', error));
+
+        // 微信小游戏内优先使用 wx.login；账号密码仅保留给本地联调环境。
+        const wx = (globalThis as any).wx;
+        if (wx && typeof wx.login === 'function') void this.loginWithWechat();
     }
 
     update() {
@@ -262,7 +274,13 @@ export class LoginMain extends Component {
         this.loginError = label(panel, '', 18, CLR.red, 0, -96, 440, 30);
         this.loginError.node.active = false;
 
-        button(panel, 0, -152, 440, 62, '登  录', () => this.onLogin(), true, 26);
+        const wx = (globalThis as any).wx;
+        button(
+            panel, 0, -152, 440, 62,
+            wx && typeof wx.login === 'function' ? '微 信 登 录' : '登  录',
+            () => { void (wx && typeof wx.login === 'function' ? this.loginWithWechat() : this.onLogin()); },
+            true, 26,
+        );
 
         this.rememberLabel = label(panel, '☑ 记住账号', 16, CLR.muted, -120, -218, 170, 30);
         this.rememberLabel.node.addComponent(Button).transition = Button.Transition.NONE;
@@ -280,7 +298,7 @@ export class LoginMain extends Component {
         label(panel, '注 册 新 账 号', 26, CLR.gold, 0, 220, 400, 40);
 
         this.regAccEdit = edit(panel, 0, 136, 440, 56, '账号（3-16位，字母/数字/下划线/中文）');
-        this.regPwdEdit = edit(panel, 0, 62, 440, 56, '密码（6-20位）', true);
+        this.regPwdEdit = edit(panel, 0, 62, 440, 56, '密码（8-20位）', true);
         this.regPwd2Edit = edit(panel, 0, -12, 440, 56, '确认密码', true);
 
         const regionBtn = box(panel, 0, -86, 440, 56, CLR.input, 10, CLR.border);
@@ -357,55 +375,67 @@ export class LoginMain extends Component {
         lb.node.active = true;
     }
 
-    private onLogin() {
+    private async loginWithWechat() {
+        if (this.authenticating) return;
+        this.authenticating = true;
+        this.showToast('正在使用微信登录…');
+        try {
+            await authApi.loginWithWechat();
+            director.loadScene(LoginMain.FARM_SCENE);
+        } catch (error) {
+            this.showError(this.loginError, this.errorMessage(error));
+        } finally {
+            this.authenticating = false;
+        }
+    }
+
+    private async onLogin() {
+        if (this.authenticating) return;
         const acc = this.accEdit.string.trim();
         const pwd = this.pwdEdit.string;
         if (!acc || !pwd) { this.showError(this.loginError, '请输入账号和密码'); return; }
         this.loginError.node.active = false;
-
-        Http.post(SERVER.baseUrl + '/api/login', { username: acc, password: pwd, region: this.region }, (code, data) => {
-            if (data && data.success && data.user) {
-                if (this.rememberOn) {
-                    sys.localStorage.setItem('game_remember', JSON.stringify({ acc, region: this.region }));
-                }
-                const userId = data.user.id ?? data.user.username;
-                sys.localStorage.setItem(LOGIN_UID_KEY, String(userId));
-                sys.localStorage.setItem(LOGIN_NAME_KEY, data.user.username);
-                director.loadScene(LoginMain.FARM_SCENE);
-            } else {
-                this.showError(this.loginError, (data && data.message) || '登录失败，请稍后重试');
+        this.authenticating = true;
+        try {
+            await authApi.loginWithPassword(acc, pwd, this.region);
+            if (this.rememberOn) {
+                sys.localStorage.setItem('game_remember', JSON.stringify({ acc, region: this.region }));
             }
-        });
+            director.loadScene(LoginMain.FARM_SCENE);
+        } catch (error) {
+            this.showError(this.loginError, this.errorMessage(error));
+        } finally {
+            this.authenticating = false;
+        }
     }
 
-    private onRegister() {
+    private async onRegister() {
+        if (this.authenticating) return;
         const acc = this.regAccEdit.string.trim();
         const pwd = this.regPwdEdit.string;
         const pwd2 = this.regPwd2Edit.string;
         if (!acc || !pwd || !pwd2) { this.showError(this.regError, '请填写完整信息'); return; }
         if (pwd !== pwd2) { this.showError(this.regError, '两次输入的密码不一致'); return; }
         if (acc.length < 3 || acc.length > 16) { this.showError(this.regError, '账号需为 3-16 位字符'); return; }
-        if (pwd.length < 6 || pwd.length > 20) { this.showError(this.regError, '密码长度需为 6-20 位'); return; }
+        if (pwd.length < 8 || pwd.length > 64) { this.showError(this.regError, '密码长度需为 8-64 位'); return; }
         this.regError.node.active = false;
+        this.authenticating = true;
+        try {
+            await authApi.register(acc, pwd, this.region);
+            this.accEdit.string = acc;
+            this.pwdEdit.string = '';
+            this.showPage(this.pageLogin);
+            this.showToast('注册成功，请登录！');
+        } catch (error) {
+            this.showError(this.regError, this.errorMessage(error));
+        } finally {
+            this.authenticating = false;
+        }
+    }
 
-        Http.post(SERVER.baseUrl + '/api/register', { username: acc, password: pwd, region: this.region }, (code, data) => {
-            if (data && data.success && data.user) {
-                this.accEdit.string = data.user.username;
-                this.pwdEdit.string = '';
-                this.showPage(this.pageLogin);
-                this.showToast('注册成功，请登录！');
-            } else {
-                this.showError(this.regError, (data && data.message) || '注册失败，请稍后重试');
-            }
-            if (data && data.success && data.user) {
-                this.accEdit.string = data.user.username;
-                this.pwdEdit.string = '';
-                this.showPage(this.pageLogin);
-                this.showToast('注册成功，请登录！');
-            } else {
-                this.showError(this.regError, (data && data.message) || '注册失败，请稍后重试');
-            }
-        });
+    private errorMessage(error: unknown): string {
+        if (error instanceof ApiError || error instanceof Error) return error.message;
+        return '登录失败，请稍后重试';
     }
 
     private toggleRemember() {

@@ -1,5 +1,31 @@
 # 图片资源清单
 
+## 工具光标与用户动画
+
+70% 透明跟随图标默认直接复用 LeftBar 已有的 `nav_water/nav_fertilizer/nav_harvest/nav_shovel` Sprite，不需要增加图片。只有想为鼠标光标使用不同图片，或 LeftBar 节点没有 Sprite 时，才新增以下可选资源：
+
+```text
+assets/resources/farm/tools/
+├─cursor_water.png          # 可选：浇水备用光标
+├─cursor_fertilizer.png     # 可选：施肥备用光标
+├─cursor_harvest.png        # 可选：采摘备用光标
+└─cursor_shovel.png         # 可选：铲子备用光标
+```
+
+四种操作动画需要由你提供，建议新增：
+
+```text
+assets/resources/farm/effects/
+├─water/                    # water_effect.anim 与帧图片
+├─fertilizer/               # fertilizer_effect.anim 与帧图片
+├─harvest/                  # harvest_effect.anim 与帧图片
+└─shovel/                   # shovel_effect.anim 与帧图片
+```
+
+代码会把选中的 LeftBar Sprite 复制为约 70% 透明光标；备用图标仅在按钮没有 Sprite 时动态加载。四种动画由你制作后绑定到场景模板，具体节点见 `../scenes/tool-effects.setup.md`。旧代码生成的水滴、肥雾、弹跳、飘字动画已移除。
+
+## 原有资源
+
 resources/
 ├─ TopBar
 │  ├─ bg.png

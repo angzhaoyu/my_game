@@ -7,6 +7,7 @@ import { PlayerModel } from '../data/PlayerModel';
 import type { ItemCategory, InventoryStack } from '../data/ItemData';
 import { CATEGORY_LABEL } from '../data/ItemData';
 import { CellItem } from './CellItem';
+import type { GameActionHandler } from '../GameAction';
 
 const { ccclass } = _decorator;
 
@@ -18,11 +19,11 @@ const C_TEXT_D  = new Color(58, 42, 18, 255);
 export class BackpackPanel extends Component {
   inventory!: InventoryModel;
   player!: PlayerModel;
-  onGoldChanged: (gold: number) => void = () => {};
   onToast: (msg: string, duration?: number) => void = () => {};
-  onChanged: () => void = () => {};
+  onAction: GameActionHandler = async () => ({ ok: false, message: '网络服务尚未就绪' });
 
   private panelNode: Node | null = null;
+  private pendingItems = new Set<string>();
   private scrollView: ScrollView | null = null;
   private contentNode: Node | null = null;
   private footerLabel: Label | null = null;
@@ -241,18 +242,18 @@ export class BackpackPanel extends Component {
   private showDetail(st: InventoryStack) {
     const h = Math.floor((Date.now() - st.acquired) / 3600000);
     const ago = h < 1 ? '刚刚' : (h < 24 ? h + '小时前' : Math.floor(h / 24) + '天前');
-    this.onToast(`【${CATEGORY_LABEL[st.category]}】${st.name} × ${st.count} · 回收价 💰${st.value} · 获得于 ${ago}`, 2.5);
+    this.onToast(`【${CATEGORY_LABEL[st.category]}】${st.name} × ${st.count} · 回收价 ${st.value} · 获得于 ${ago}`, 2.5);
   }
 
-  private sellItem(id: string) {
-    const st = this.inventory.findByItemId(id);
-    const name = st ? st.name : '';
-    const gain = this.inventory.sellOne(id);
-    if (gain <= 0) return;
-    this.player.addGold(gain);
-    this.onGoldChanged(this.player.gold);
-    this.onToast(`+${gain} 💰 出售${name ? ' ' + name : ''}`);
-    this.render();
-    this.onChanged();
+  private async sellItem(id: string) {
+    if (this.pendingItems.has(id)) { this.onToast('该物品正在同步'); return; }
+    this.pendingItems.add(id);
+    try {
+      const result = await this.onAction('sell_item', { itemId: id, quantity: 1 });
+      this.onToast(result.message);
+      this.render();
+    } finally {
+      this.pendingItems.delete(id);
+    }
   }
 }

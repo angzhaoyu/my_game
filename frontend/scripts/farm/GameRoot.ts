@@ -1,22 +1,28 @@
 /**
- * GameRoot.ts —— 顶层装配（农场场景主逻辑，完全基于 farm.scene 布局）
+ * 农场场景装配层：只负责 Cocos 节点绑定、远端快照投影和命令分发。
+ * 金币/背包/土地不再由客户端整包覆盖，服务端是唯一权威来源。
  */
-import { _decorator, Button, Component, Label, Node, ResolutionPolicy, sys, view } from 'cc';
+import {
+  _decorator, Button, Component, director, Game, game as cocosGame, Label, Node, ResolutionPolicy, Sprite, view,
+} from 'cc';
 import { InventoryModel } from './data/InventoryModel';
 import { PlayerModel } from './data/PlayerModel';
 import { FarmModel } from './data/FarmModel';
-import { INITIAL_GOLD, buildInitialInventory } from './config/ItemConfig';
 import { BackpackPanel } from './ui/BackpackPanel';
 import { ShopPanel } from './ui/ShopPanel';
 import { Toast } from './ui/Toast';
 import { LandView } from './ui/LandView';
-import { UserApi, FarmApi, RemoteUserState, LOGIN_UID_KEY, LOGIN_NAME_KEY } from '../login/Net';
+import type { ToolMode } from './ui/LandView';
+import { SessionStore } from '../core/auth/SessionStore';
+import { applyRemoteCatalog } from '../core/game/RemoteCatalog';
+import { ApiError } from '../core/network/HttpClient';
+import type { GameCommandType, GameSnapshot } from '../core/network/Contracts';
+import { gameSync } from '../core/sync/GameSyncService';
+import type { GameActionFeedback } from './GameAction';
 
 const { ccclass, property } = _decorator;
-
 export const DESIGN_W = 1280;
 export const DESIGN_H = 720;
-const DEMO_USER_ID = 1;
 
 @ccclass('GameRoot')
 export class GameRoot extends Component {
@@ -27,181 +33,136 @@ export class GameRoot extends Component {
   @property({ type: Node }) public goldLabelNode: Node | null = null;
   @property({ type: Node }) public toastNode: Node | null = null;
 
-  private player    = new PlayerModel(INITIAL_GOLD);
+  private player = new PlayerModel(0);
   private inventory = new InventoryModel();
-  private api       = new UserApi();
-  private farmApi   = new FarmApi();
-  private farm      = new FarmModel();
+  private farm = new FarmModel();
   private landView: LandView | null = null;
-  private userId: string | number = DEMO_USER_ID;
-
   private goldLabel: Label | null = null;
   private levelLabel: Label | null = null;
+  private diamondsLabel: Label | null = null;
+  private energyLabel: Label | null = null;
   private toast: Toast | null = null;
   private backpack: BackpackPanel | null = null;
   private shop: ShopPanel | null = null;
-
-  private static FARM_SAVE_KEY = 'farm_state_';
+  private unsubscribeSnapshot: (() => void) | null = null;
+  private ready = false;
 
   async onLoad() {
     view.setDesignResolutionSize(DESIGN_W, DESIGN_H, ResolutionPolicy.FIXED_HEIGHT);
-
-    const savedId   = sys.localStorage.getItem(LOGIN_UID_KEY);
-    const savedName = sys.localStorage.getItem(LOGIN_NAME_KEY);
-    if (savedId) {
-      const n = Number(savedId);
-      this.userId = isNaN(n) ? savedId : n;
+    if (!SessionStore.get()) {
+      director.loadScene('login');
+      return;
     }
-    if (savedName) this.player.username = savedName;
 
     this.bindSceneNodes();
+    this.unsubscribeSnapshot = gameSync.onSnapshot(snapshot => this.applySnapshot(snapshot));
+    cocosGame.on(Game.EVENT_SHOW, this.onAppShow, this);
 
-    const onGold  = (g: number) => { if (this.goldLabel) this.goldLabel.string = '💰 ' + g; };
-    const onToast = (m: string, d = 1.2) => this.toast?.show(m, d);
-
-    const persist = async () => {
-      try {
-        const latest: RemoteUserState = await this.api.saveAndSync(
-          this.userId, this.player.gold, this.inventory.toJSON()
-        );
-        this.player.gold = latest.gold;
-        if (latest.inventory && latest.inventory.length > 0) {
-          this.inventory.loadJSON(latest.inventory);
-        }
-        onGold(this.player.gold);
-
-        if (this.backpack?.isOpen) this.backpack.render();
-        if (this.shop?.isOpen)     this.shop.render();
-      } catch (err) {
-        console.warn('[GameRoot] 实时保存/同步失败', err);
-        this.api.saveInventory(this.userId, this.player.gold, this.inventory.toJSON())
-          .catch(() => {});
-      }
-    };
-
-    if (this.backpack) {
-      this.backpack.onGoldChanged = onGold;
-      this.backpack.onToast       = onToast;
-      this.backpack.onChanged     = persist;
-    }
-    if (this.shop) {
-      this.shop.onGoldChanged     = onGold;
-      this.shop.onToast           = onToast;
-      this.shop.onChanged         = persist;
-    }
+    // 缓存只用于弱网首屏展示，离线时禁止经济操作，绝不回写覆盖服务端。
+    const cached = gameSync.restoreCached();
+    if (cached) this.toast?.show('正在同步最新数据…');
 
     try {
-      const s = await this.api.fetchState(this.userId);
-      this.player.bindUser(String(this.userId), s.username ?? savedName);
-      this.player.gold = s.gold;
-      if (s.inventory.length > 0) {
-        this.inventory.loadJSON(s.inventory);
+      await gameSync.bootstrap();
+      this.ready = true;
+      if (gameSync.pendingCount > 0) this.toast?.show(`正在恢复 ${gameSync.pendingCount} 个待同步操作`);
+    } catch (error) {
+      this.ready = false;
+      if (error instanceof ApiError && error.status === 401) {
+        director.loadScene('login');
+      } else if (cached) {
+        this.toast?.show('网络不可用：当前为只读缓存', 2.5);
       } else {
-        this.inventory.loadJSON(buildInitialInventory());
-        persist();
+        this.toast?.show(this.errorMessage(error), 2.5);
       }
-    } catch (e) {
-      console.warn('[GameRoot] 后端不可用，使用本地存档', e);
-      const localInv = this.readLocalInventory();
-      if (localInv.length > 0) {
-        this.inventory.loadJSON(localInv);
-      } else {
-        this.inventory.loadJSON(buildInitialInventory());
+    }
+  }
+
+  onDestroy() {
+    this.unsubscribeSnapshot?.();
+    cocosGame.off(Game.EVENT_SHOW, this.onAppShow, this);
+  }
+
+  private onAppShow = () => {
+    if (!SessionStore.get()) { director.loadScene('login'); return; }
+    void gameSync.bootstrap().then(() => { this.ready = true; }).catch(error => {
+      console.warn('[GameRoot] 回前台同步失败', error);
+    });
+  };
+
+  private applySnapshot(snapshot: GameSnapshot): void {
+    applyRemoteCatalog(snapshot.catalog);
+    this.player.loadJSON({
+      gold: snapshot.profile.gold,
+      userId: snapshot.profile.id,
+      username: snapshot.profile.username,
+      level: snapshot.profile.level,
+      exp: snapshot.profile.exp,
+      energy: snapshot.profile.energy,
+    });
+    this.inventory.loadJSON(snapshot.inventory as any);
+    this.farm.loadJSON({ plots: snapshot.plots, lastTick: snapshot.lastTick });
+    this.refreshHud();
+    this.landView?.render();
+    if (this.backpack?.isOpen) this.backpack.render();
+    if (this.shop?.isOpen) this.shop.render();
+  }
+
+  private async executeAction(
+    type: GameCommandType,
+    payload: Record<string, unknown>,
+  ): Promise<GameActionFeedback> {
+    if (!this.ready) return { ok: false, message: '正在连接服务器，请稍候' };
+    if (gameSync.pendingCount > 0) {
+      void gameSync.resume();
+      return { ok: false, message: '有操作等待同步，请恢复网络后再试' };
+    }
+    try {
+      const snapshot = await gameSync.execute(type, payload);
+      return { ok: true, message: snapshot.message || '操作成功' };
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        director.loadScene('login');
+        return { ok: false, message: '登录已失效' };
       }
-      const localGold = sys.localStorage.getItem(this.inventoryKey() + '_gold');
-      const g = localGold ? Number(localGold) : NaN;
-      if (isFinite(g)) this.player.gold = g;
-    }
-    onGold(this.player.gold);
-
-    // 农场土地：读档 → 补算离线时间 → 渲染
-    this.loadFarmState();
-    this.farm.updateModel(Date.now());
-    this.refreshLevelLabel();
-    if (this.landView) this.landView.render();
-  }
-
-  // ===== 农场相关 =====
-
-  private farmStorageKey(): string {
-    return GameRoot.FARM_SAVE_KEY + String(this.userId);
-  }
-
-  private loadFarmState() {
-    // 1) 先读本地玩家等级/经验
-    try {
-      const p = JSON.parse(sys.localStorage.getItem(this.farmStorageKey() + '_p') || 'null');
-      if (p) this.player.loadJSON({ level: p.level, exp: p.exp, energy: p.energy });
-    } catch (e) { /* ignore */ }
-
-    // 2) 尝试从后端拉取（失败则用本地兜底）
-    this.farmApi.fetchState(this.userId).then((remote) => {
-      if (remote && Array.isArray(remote.plots) && remote.plots.length > 0) {
-        this.farm.loadJSON({ plots: remote.plots, lastTick: remote.lastTick ?? Date.now() });
-      } else {
-        this.loadFarmLocal();
+      if (error instanceof ApiError && error.retryable && gameSync.pendingCount > 0) {
+        return { ok: false, message: '网络不稳定，操作已保留，将在恢复后自动确认' };
       }
-      this.farm.updateModel(Date.now());
-      if (this.landView) this.landView.render();
-    }).catch(() => this.loadFarmLocal());
-  }
-
-  private inventoryKey(): string {
-    return 'farm_inv_' + String(this.userId);
-  }
-
-  private readLocalInventory(): any[] {
-    try {
-      const raw = sys.localStorage.getItem(this.inventoryKey());
-      const arr = raw ? JSON.parse(raw) : [];
-      return Array.isArray(arr) ? arr : [];
-    } catch (e) { return []; }
-  }
-
-  private loadFarmLocal() {
-    try {
-      const raw = sys.localStorage.getItem(this.farmStorageKey());
-      if (raw) this.farm.loadJSON(JSON.parse(raw));
-    } catch (e) {
-      this.farm.reset();
+      return { ok: false, message: this.errorMessage(error) };
     }
   }
 
-  private persistFarm() {
-    try {
-      sys.localStorage.setItem(this.farmStorageKey(), JSON.stringify(this.farm.toJSON()));
-      sys.localStorage.setItem(
-        this.farmStorageKey() + '_p',
-        JSON.stringify({ level: this.player.level, exp: this.player.exp, energy: this.player.energy }),
-      );
-      // 种植/施肥会消耗背包，一并本地存档
-      sys.localStorage.setItem(this.inventoryKey(), JSON.stringify(this.inventory.toJSON()));
-      sys.localStorage.setItem(this.inventoryKey() + '_gold', String(this.player.gold));
-    } catch (e) { /* ignore */ }
-    // 尽量同步到后端（失败静默）
-    this.farmApi.saveState(this.userId, this.farm.toJSON()).catch(() => {});
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : '网络异常，请稍后重试';
   }
 
-  private refreshLevelLabel() {
-    if (this.levelLabel) {
-      this.levelLabel.string = `Lv.${this.player.level}`;
-    }
+  private refreshHud(): void {
+    // TopBar 已有 CoinsIcon / DiamondsIcon / EnergyIcon，Label 只显示数值。
+    if (this.goldLabel) this.goldLabel.string = String(this.player.gold);
+    if (this.levelLabel) this.levelLabel.string = `Lv.${this.player.level}`;
+    if (this.diamondsLabel) this.diamondsLabel.string = String(gameSync.snapshot?.profile.diamonds ?? 0);
+    if (this.energyLabel) this.energyLabel.string = String(this.player.energy);
   }
 
-  private bindToolButton(leftBar: Node, childName: string, mode: 'water' | 'fert') {
-    const btn = leftBar.getChildByName(childName);
-    if (!btn) return;
-    const comp = btn.getComponent(Button) || btn.addComponent(Button);
-    if (comp) {
-      comp.transition = Button.Transition.SCALE;
-      comp.zoomScale = 0.92;
-    }
-    btn.off(Button.EventType.CLICK);
-    btn.on(Button.EventType.CLICK, () => {
+  private bindToolButton(leftBar: Node, childName: string, mode: Exclude<ToolMode, 'none'>) {
+    const node = leftBar.getChildByName(childName);
+    if (!node) return;
+    const button = node.getComponent(Button) || node.addComponent(Button);
+    button.transition = Button.Transition.SCALE;
+    button.zoomScale = 0.92;
+    node.off(Button.EventType.CLICK);
+    node.on(Button.EventType.CLICK, () => {
       if (!this.landView) return;
       const next = this.landView.currentTool === mode ? 'none' : mode;
-      this.landView.setTool(next);
-      if (next === 'none') this.toast?.show('已取消工具');
+      const icon = node.getComponent(Sprite) || node.getComponentInChildren(Sprite);
+      this.landView.setTool(next, next === 'none' ? null : (icon?.spriteFrame || null));
+      const prompts: Record<Exclude<ToolMode, 'none'>, string> = {
+        water: '请选择要浇水的土地',
+        fert: '请选择要施肥的土地',
+        harvest: '请选择要采摘的土地',
+        shovel: '请选择要铲除作物的土地',
+      };
+      this.toast?.show(next === 'none' ? '已取消工具' : prompts[mode]);
     });
   }
 
@@ -215,105 +176,78 @@ export class GameRoot extends Component {
     return null;
   }
 
-  private getSearchRoot(): Node {
-    return this.node?.scene || this.node;
-  }
-
   private bindSceneNodes() {
-    const root = this.getSearchRoot();
-
-    // 金币 Label
+    const root = this.node.scene || this.node;
     const goldNode = this.goldLabelNode || this.findNode(root, 'CoinsLabel') || this.findNode(root, 'gold_hud');
-    if (goldNode) {
-      this.goldLabel = goldNode.getComponent(Label) || goldNode.getComponentInChildren(Label);
-    }
-
-    // 商店按钮
-    const shopBtn = this.shopButton || this.findNode(root, 'ShopBtn') || this.findNode(root, 'btn_shop_btn');
-    if (shopBtn) {
-      const btn = shopBtn.getComponent(Button) || shopBtn.addComponent(Button);
-      if (btn) {
-        btn.transition = Button.Transition.SCALE;
-        btn.zoomScale = 0.92;
-      }
-      shopBtn.off(Button.EventType.CLICK);
-      shopBtn.on(Button.EventType.CLICK, () => this.openShop());
-    }
-
-    // 背包按钮
-    const bpBtn = this.backpackButton || this.findNode(root, 'BackpackBtn') || this.findNode(root, 'btn_open_btn');
-    if (bpBtn) {
-      const btn = bpBtn.getComponent(Button) || bpBtn.addComponent(Button);
-      if (btn) {
-        btn.transition = Button.Transition.SCALE;
-        btn.zoomScale = 0.92;
-      }
-      bpBtn.off(Button.EventType.CLICK);
-      bpBtn.on(Button.EventType.CLICK, () => this.openBackpack());
-    }
-
-    // Toast
-    const toastN = this.toastNode || this.findNode(root, 'Toast');
-    if (toastN) {
-      this.toast = toastN.getComponent(Toast) || toastN.addComponent(Toast);
-    }
-
-    // 等级 Label
+    this.goldLabel = goldNode?.getComponent(Label) || goldNode?.getComponentInChildren(Label) || null;
     const levelNode = this.findNode(root, 'LevelLabel');
-    if (levelNode) {
-      this.levelLabel = levelNode.getComponent(Label) || levelNode.getComponentInChildren(Label);
-    }
+    this.levelLabel = levelNode?.getComponent(Label) || levelNode?.getComponentInChildren(Label) || null;
+    const diamondsNode = this.findNode(root, 'DiamondsLabel');
+    this.diamondsLabel = diamondsNode?.getComponent(Label) || diamondsNode?.getComponentInChildren(Label) || null;
+    const energyNode = this.findNode(root, 'EnergyLabel');
+    this.energyLabel = energyNode?.getComponent(Label) || energyNode?.getComponentInChildren(Label) || null;
 
-    // ===== 农场土地 =====
+    const toastNode = this.toastNode || this.findNode(root, 'Toast');
+    if (toastNode) this.toast = toastNode.getComponent(Toast) || toastNode.addComponent(Toast);
+
+    const action = (type: GameCommandType, payload: Record<string, unknown>) => this.executeAction(type, payload);
     const lands = this.findNode(root, 'lands');
     if (lands) {
       this.landView = lands.getComponent(LandView) || lands.addComponent(LandView);
-      if (this.landView) {
-        this.landView.farm = this.farm;
-        this.landView.player = this.player;
-        this.landView.inventory = this.inventory;
-        this.landView.onToast = (m, d) => this.toast?.show(m, d);
-        this.landView.onGoldChanged = (g) => { if (this.goldLabel) this.goldLabel.string = '💰 ' + g; };
-        this.landView.onExpChanged = (lv) => this.refreshLevelLabel();
-        this.landView.onPersist = () => this.persistFarm();
-      }
+      this.landView.farm = this.farm;
+      this.landView.player = this.player;
+      this.landView.inventory = this.inventory;
+      this.landView.onToast = (message, duration) => this.toast?.show(message, duration);
+      this.landView.onAction = action;
+      this.landView.now = () => gameSync.serverNow();
+      this.landView.configureToolLayers(
+        this.findNode(root, 'ToolCursorLayer'),
+        this.findNode(root, 'ToolEffectLayer'),
+      );
     }
 
-    // ===== 左侧工具栏：浇水 / 施肥 =====
-    const leftBar = this.findNode(root, 'LefttBar');
+    const leftBar = this.findNode(root, 'LeftBar') || this.findNode(root, 'LefttBar');
     if (leftBar) {
       this.bindToolButton(leftBar, 'Water', 'water');
       this.bindToolButton(leftBar, 'Fertilizer', 'fert');
+      this.bindToolButton(leftBar, 'Harvest', 'harvest');
+      this.bindToolButton(leftBar, 'Shovel', 'shovel');
     }
 
-    // 背包面板
-    const bpPanel = this.backpackPanelNode || this.findNode(root, 'BackpackPanel');
-    if (bpPanel) {
-      this.backpack = bpPanel.getComponent(BackpackPanel) || bpPanel.addComponent(BackpackPanel);
-      if (this.backpack) {
-        this.backpack.inventory = this.inventory;
-        this.backpack.player = this.player;
-      }
+    const backpackNode = this.backpackPanelNode || this.findNode(root, 'BackpackPanel');
+    if (backpackNode) {
+      this.backpack = backpackNode.getComponent(BackpackPanel) || backpackNode.addComponent(BackpackPanel);
+      this.backpack.inventory = this.inventory;
+      this.backpack.player = this.player;
+      this.backpack.onToast = (message, duration) => this.toast?.show(message, duration);
+      this.backpack.onAction = action;
     }
 
-    // 商店面板
-    const shopPanel = this.shopPanelNode || this.findNode(root, 'ShopPanel');
-    if (shopPanel) {
-      this.shop = shopPanel.getComponent(ShopPanel) || shopPanel.addComponent(ShopPanel);
-      if (this.shop) {
-        this.shop.inventory = this.inventory;
-        this.shop.player = this.player;
-      }
+    const shopNode = this.shopPanelNode || this.findNode(root, 'ShopPanel');
+    if (shopNode) {
+      this.shop = shopNode.getComponent(ShopPanel) || shopNode.addComponent(ShopPanel);
+      this.shop.inventory = this.inventory;
+      this.shop.player = this.player;
+      this.shop.onToast = (message, duration) => this.toast?.show(message, duration);
+      this.shop.onAction = action;
     }
+
+    this.bindOpenButton(
+      this.backpackButton || this.findNode(root, 'BackpackBtn') || this.findNode(root, 'btn_open_btn'),
+      () => { if (this.shop?.isOpen) this.shop.close(); this.backpack?.open(); },
+    );
+    this.bindOpenButton(
+      this.shopButton || this.findNode(root, 'ShopBtn') || this.findNode(root, 'btn_shop_btn'),
+      () => { if (this.backpack?.isOpen) this.backpack.close(); this.shop?.open(); },
+    );
   }
 
-  private openBackpack() {
-    if (this.shop?.isOpen) this.shop.close();
-    this.backpack?.open();
-  }
-
-  private openShop() {
-    if (this.backpack?.isOpen) this.backpack.close();
-    this.shop?.open();
+  private bindOpenButton(node: Node | null, handler: () => void): void {
+    if (!node) return;
+    const button = node.getComponent(Button) || node.addComponent(Button);
+    button.transition = Button.Transition.SCALE;
+    button.zoomScale = 0.92;
+    node.off(Button.EventType.CLICK);
+    node.on(Button.EventType.CLICK, handler);
   }
 }

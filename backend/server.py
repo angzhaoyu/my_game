@@ -1,200 +1,131 @@
-# -*- coding: utf-8 -*-
+"""Windows 本地一键启动使用的唯一 Python 入口。
+
+不创建环境、不安装依赖；只生成本地配置、迁移数据库、初始化一次测试账号并启动 Flask。
 """
-星域传说 · 游戏账号登录服务器（Flask + MySQL）
-接口：
-    GET  /api/regions       大区列表
-    POST /api/login         登录（与 MySQL 的 users 表比对）
-    POST /api/register      注册（写入 MySQL）
-    GET  /                  登录页面（手机横屏）
+from __future__ import annotations
 
-运行：
-    1) 把 config.py 里的 password 改成你自己的 MySQL 密码
-    2) 双击「启动游戏服务器.bat」，或在命令行执行  python server.py
-    3) 浏览器打开 http://localhost:8000
+import os
+import sys
+import traceback
+import warnings
+from importlib import import_module
+from pathlib import Path
+
+BACKEND_DIR = Path(__file__).resolve().parent
+ENV_FILE = BACKEND_DIR / ".env"
+ERROR_LOG = BACKEND_DIR / "启动错误.log"
+
+LOCAL_ENV = """APP_ENV=development
+HOST=0.0.0.0
+PORT=8000
+APP_SECRET=local-double-click-development-secret
+ACCESS_TOKEN_TTL_SECONDS=7200
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=123456
+DB_NAME=game_db
+DB_CONNECT_TIMEOUT_SECONDS=5
+WECHAT_APP_ID=
+WECHAT_APP_SECRET=
+ENABLE_PASSWORD_AUTH=true
+ALLOW_DEMO_SEED=true
+ALLOWED_ORIGINS=http://localhost:7456,http://127.0.0.1:7456
 """
 
-import pymysql
 
-from flask import Flask, jsonify, request, send_from_directory
-
-import database as db
-
-app = Flask(__name__, static_folder="static", static_url_path="/static")
-app.json.ensure_ascii = False  # 接口直接返回中文，方便调试
-
-
-# ---------------- CORS 跨域（Cocos 预览/微信开发者工具需要） ----------------
-
-@app.after_request
-def _cors_headers(resp):
-    resp.headers['Access-Control-Allow-Origin'] = '*'
-    resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-    resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
-    return resp
+def ensure_local_config() -> None:
+    if ENV_FILE.exists():
+        print("[1/3] 本地配置已就绪。", flush=True)
+        return
+    ENV_FILE.write_text(LOCAL_ENV, encoding="utf-8")
+    print("[1/3] 已生成本地配置 backend/.env。", flush=True)
 
 
-@app.before_request
-def _cors_preflight():
-    if request.method == 'OPTIONS':
-        return '', 204
+def write_error_log() -> None:
+    ERROR_LOG.write_text(traceback.format_exc(), encoding="utf-8")
+    print(f"详细错误已保存到：{ERROR_LOG}", flush=True)
 
 
-# ---------------- 页面 ----------------
-
-@app.get("/")
-def index():
-    return send_from_directory(app.static_folder, "index.html")
-
-
-# ---------------- 接口 ----------------
-
-@app.get("/api/regions")
-def api_regions():
-    return jsonify({"success": True, "regions": db.REGIONS})
-
-
-@app.post("/api/login")
-def api_login():
-    """登录：拿前端提交的 账号 + 密码 + 大区，与 MySQL users 表比对。"""
-    data = request.get_json(silent=True) or {}
-    username = (data.get("username") or "").strip()
-    password = data.get("password") or ""
-    region = (data.get("region") or "").strip()
-
-    if not username or not password:
-        return jsonify({"success": False, "code": "INVALID", "message": "请输入账号和密码"}), 400
-    if region not in db.REGIONS:
-        return jsonify({"success": False, "code": "INVALID_REGION", "message": "请选择正确的大区"}), 400
-
-    user = db.verify_login(username, password)
-    if user is None:
-        return jsonify({"success": False, "code": "AUTH_FAILED",
-                        "message": "账号或密码错误，请检查后重试"}), 401
-    if user["region"] != region:
-        return jsonify({"success": False, "code": "REGION_MISMATCH",
-                        "message": f"该账号属于【{user['region']}】，请切换到对应大区后登录"}), 403
-
-    return jsonify({"success": True, "message": "登录成功", "user": db.public_profile(user)})
+def save_local_database_credentials(username: str, password: str) -> None:
+    """修复早期 .env.example 留下的 game/change-me，本地启动无需手工改文件。"""
+    values = {"DB_USER": username, "DB_PASSWORD": password}
+    lines = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.exists() else []
+    found = set()
+    output = []
+    for line in lines:
+        key = line.split("=", 1)[0].strip() if "=" in line else ""
+        if key in values:
+            output.append(f"{key}={values[key]}")
+            found.add(key)
+        else:
+            output.append(line)
+    for key, value in values.items():
+        if key not in found:
+            output.append(f"{key}={value}")
+    ENV_FILE.write_text("\n".join(output) + "\n", encoding="utf-8")
+    # Settings.from_env 以真实环境变量为优先级，因此本进程也要同步更新。
+    os.environ.update(values)
 
 
-@app.post("/api/register")
-def api_register():
-    """注册新账号：账号 + 密码 + 大区 → 写入 MySQL users 表（默认金币 100，其他基础属性为 0）。"""
-    data = request.get_json(silent=True) or {}
-    username = (data.get("username") or "").strip()
-    password = data.get("password") or ""
-    region = (data.get("region") or "").strip()
-
-    if not (3 <= len(username) <= 16):
-        return jsonify({"success": False, "code": "INVALID_USERNAME",
-                        "message": "账号需为 3-16 位字符"}), 400
-    if not (6 <= len(password) <= 20):
-        return jsonify({"success": False, "code": "INVALID_PASSWORD",
-                        "message": "密码长度需为 6-20 位"}), 400
-    if region not in db.REGIONS:
-        return jsonify({"success": False, "code": "INVALID_REGION", "message": "请选择正确的大区"}), 400
-
-    ok, result = db.register_user(username, password, region)
-    if not ok:
-        return jsonify({"success": False, "code": "DUPLICATE", "message": result}), 409
-    return jsonify({"success": True, "message": "注册成功", "user": db.public_profile(result)}), 201
-
-
-# ---------------- GameRoot 兼容接口 ----------------
-
-@app.get("/api/game/state")
-def api_game_state():
-    data = request.get_json(silent=True) or {}
-    username = (request.args.get("username") or data.get("username") or "").strip()
-    user_id_raw = request.args.get("user_id") or data.get("user_id")
-
-    user_id = None
-    if user_id_raw is not None and str(user_id_raw).strip() != "":
-        try:
-            user_id = int(user_id_raw)
-        except ValueError:
-            return jsonify({"success": False, "code": "INVALID", "message": "user_id 必须是整数"}), 400
-
-    if not username and user_id is None:
-        return jsonify({"success": False, "code": "INVALID", "message": "缺少账号或 user_id"}), 400
-
-    state = db.get_player_game_state(username=username or None, user_id=user_id)
-    if state is None:
-        return jsonify({"success": False, "code": "NO_USER", "message": "账号不存在"}), 404
-    return jsonify({"success": True, "user": state})
-
-
-@app.post("/api/game/inventory")
-def api_game_inventory():
-    data = request.get_json(silent=True) or {}
-    username = (data.get("username") or "").strip()
-    inventory = data.get("inventory") or []
-    if not username:
-        return jsonify({"success": False, "code": "INVALID", "message": "缺少账号"}), 400
-    ok, result = db.save_player_inventory(username, inventory)
-    if not ok:
-        return jsonify({"success": False, "code": "NO_USER", "message": result}), 404
-    return jsonify({"success": True, "user": result})
-
-
-# ---------------- 农场接口 ----------------
-
-@app.get("/api/farm")
-def api_farm():
-    """获取账号的农场：24 块地及各自状态（a正常/b未开发/c肥力充足/d缺水）。"""
-    username = (request.args.get("username") or "").strip()
-    if not username:
-        return jsonify({"success": False, "code": "INVALID", "message": "缺少账号"}), 400
-    plots = db.get_farm(username)
-    if plots is None:
-        return jsonify({"success": False, "code": "NO_USER", "message": "账号不存在"}), 404
-    return jsonify({"success": True, "plots": plots})
-
-
-@app.post("/api/farm/action")
-def api_farm_action():
-    """对地块执行操作：develop 开发(b->a) / water 浇水(d->a) / fertilize 施肥(a->c)。"""
-    data = request.get_json(silent=True) or {}
-    username = (data.get("username") or "").strip()
-    plot_index = data.get("plot_index")
-    action = (data.get("action") or "").strip()
+def main() -> int:
+    ensure_local_config()
+    warnings.filterwarnings("ignore", message="Python 3\.8 is no longer supported.*")
     try:
-        plot_index = int(plot_index)
-    except (TypeError, ValueError):
-        return jsonify({"success": False, "code": "INVALID", "message": "地块编号无效"}), 400
+        import_module("flask")
+        import_module("pymysql")
+        from app import create_app
+        from app.manage import migrate, seed_demo
+        from app.repositories.mysql import MySQLRepository
+        from app.settings import Settings
+    except ModuleNotFoundError as exc:
+        print(f"[启动失败] 指定的 yolo_v5 环境缺少模块：{exc.name}", flush=True)
+        print("按要求，启动脚本不会创建环境，也不会自动安装依赖。", flush=True)
+        write_error_log()
+        return 1
 
-    ok, result = db.farm_action(username, plot_index, action)
-    if not ok:
-        return jsonify({"success": False, "code": "ACTION_FAILED", "message": result}), 400
-    return jsonify({"success": True, "message": "操作成功", "plot": result})
+    try:
+        settings = Settings.from_env()
+        repository = MySQLRepository(settings)
 
+        print("[2/3] 正在检查数据库结构和测试账号...", flush=True)
+        try:
+            migrate(repository, settings)
+        except Exception as database_error:
+            error_code = database_error.args[0] if getattr(database_error, "args", None) else None
+            can_use_legacy = (
+                error_code == 1045
+                and not settings.is_production
+                and (settings.db_user, settings.db_password) != ("root", "123456")
+            )
+            if not can_use_legacy:
+                raise
+            print(
+                f"检测到 MySQL 拒绝账号 {settings.db_user!r}，"
+                "正在自动恢复原项目账号 root / 123456...",
+                flush=True,
+            )
+            save_local_database_credentials("root", "123456")
+            settings = Settings.from_env()
+            repository = MySQLRepository(settings)
+            migrate(repository, settings)
 
-# ---------------- 启动 ----------------
+        seed_demo(repository, settings)
+        app = create_app(settings, repository=repository)
+        ERROR_LOG.unlink(missing_ok=True)
+        print("[3/3] 游戏服务器启动完成：http://127.0.0.1:8000", flush=True)
+        print("测试账号：test / test12345 / 大区一 · 电信", flush=True)
+        print("关闭此窗口即可停止服务器。", flush=True)
+        app.run(host=settings.host, port=settings.port, debug=False)
+        return 0
+    except KeyboardInterrupt:
+        return 0
+    except Exception:
+        print("[启动失败] 数据库初始化或服务器启动失败，具体原因如下：", flush=True)
+        traceback.print_exc()
+        write_error_log()
+        return 1
+
 
 if __name__ == "__main__":
-    print("正在连接 MySQL 并初始化数据库 ...")
-    try:
-        db.init_db()
-    except Exception as e:
-        print("-" * 56)
-        print("!!! 连接 MySQL 失败，请检查：")
-        print("    1. MySQL 服务是否已启动（Windows: services.msc 里看 MySQL80 是否在运行）")
-        print("    2. config.py 里的 user / password 是否填写正确")
-        print("    3. 端口是否是 3306")
-        print("-" * 56)
-        print("错误详情:", repr(e))
-        raise SystemExit(1)
-
-    print("=" * 56)
-    print("  星域传说 · 登录服务器启动  http://0.0.0.0:8000")
-    print("  数据库: MySQL -> %s@%s:%s/%s" % (
-        db.DB_CONFIG["user"], db.DB_CONFIG["host"], db.DB_CONFIG["port"], db.DB_CONFIG["database"]))
-    print("-" * 56)
-    print("  测试账号（大区需对应选择）:")
-    print("    admin     / admin123   -> 大区一 · 电信")
-    print("    player001 / 123456     -> 大区一 · 电信")
-    print("    player002 / 123456     -> 大区二 · 网通")
-    print("    player003 / 123456     -> 大区三 · 移动")
-    print("    test      / test123    -> 大区二 · 网通")
-    print("=" * 56)
-    app.run(host="0.0.0.0", port=8000, debug=False)
+    sys.exit(main())
