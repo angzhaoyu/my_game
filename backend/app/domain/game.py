@@ -134,6 +134,20 @@ class GameEngine:
         plot.fertilizer = min(float(LAND_RULES["fertilizerMax"]), plot.fertilizer + amount)
         return ActionResult(f"施肥成功，肥力 +{amount}")
 
+    def _handle_shovel(self, state: GameAggregate, payload: Dict[str, Any], now_ms: int) -> ActionResult:
+        plot = self._plot(state, payload)
+        self._require_developed(plot)
+        if not plot.crop_id:
+            raise AppError("NO_CROP", "这块地没有需要铲除的作物")
+        crop = CROPS.get(plot.crop_id)
+        crop_name = crop.name if crop else "作物"
+        plot.crop_id = None
+        plot.planted_at_ms = 0
+        plot.progress = 0
+        plot.harvestable = False
+        plot.last_boost_key = ""
+        return ActionResult(f"已铲除{crop_name}")
+
     def _handle_harvest(self, state: GameAggregate, payload: Dict[str, Any], now_ms: int) -> ActionResult:
         plot = self._plot(state, payload)
         if not plot.crop_id or not plot.harvestable:

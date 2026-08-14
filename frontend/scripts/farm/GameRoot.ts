@@ -3,7 +3,7 @@
  * 金币/背包/土地不再由客户端整包覆盖，服务端是唯一权威来源。
  */
 import {
-  _decorator, Button, Component, director, Game, game as cocosGame, Label, Node, ResolutionPolicy, view,
+  _decorator, Button, Component, director, Game, game as cocosGame, Label, Node, ResolutionPolicy, Sprite, view,
 } from 'cc';
 import { InventoryModel } from './data/InventoryModel';
 import { PlayerModel } from './data/PlayerModel';
@@ -12,6 +12,7 @@ import { BackpackPanel } from './ui/BackpackPanel';
 import { ShopPanel } from './ui/ShopPanel';
 import { Toast } from './ui/Toast';
 import { LandView } from './ui/LandView';
+import type { ToolMode } from './ui/LandView';
 import { SessionStore } from '../core/auth/SessionStore';
 import { applyRemoteCatalog } from '../core/game/RemoteCatalog';
 import { ApiError } from '../core/network/HttpClient';
@@ -136,13 +137,14 @@ export class GameRoot extends Component {
   }
 
   private refreshHud(): void {
-    if (this.goldLabel) this.goldLabel.string = `💰 ${this.player.gold}`;
+    // TopBar 已有 CoinsIcon / DiamondsIcon / EnergyIcon，Label 只显示数值。
+    if (this.goldLabel) this.goldLabel.string = String(this.player.gold);
     if (this.levelLabel) this.levelLabel.string = `Lv.${this.player.level}`;
-    if (this.diamondsLabel) this.diamondsLabel.string = `💎 ${gameSync.snapshot?.profile.diamonds ?? 0}`;
-    if (this.energyLabel) this.energyLabel.string = `⚡ ${this.player.energy}`;
+    if (this.diamondsLabel) this.diamondsLabel.string = String(gameSync.snapshot?.profile.diamonds ?? 0);
+    if (this.energyLabel) this.energyLabel.string = String(this.player.energy);
   }
 
-  private bindToolButton(leftBar: Node, childName: string, mode: 'water' | 'fert') {
+  private bindToolButton(leftBar: Node, childName: string, mode: Exclude<ToolMode, 'none'>) {
     const node = leftBar.getChildByName(childName);
     if (!node) return;
     const button = node.getComponent(Button) || node.addComponent(Button);
@@ -152,8 +154,15 @@ export class GameRoot extends Component {
     node.on(Button.EventType.CLICK, () => {
       if (!this.landView) return;
       const next = this.landView.currentTool === mode ? 'none' : mode;
-      this.landView.setTool(next);
-      this.toast?.show(next === 'none' ? '已取消工具' : mode === 'water' ? '请选择要浇水的土地' : '请选择要施肥的土地');
+      const icon = node.getComponent(Sprite) || node.getComponentInChildren(Sprite);
+      this.landView.setTool(next, next === 'none' ? null : (icon?.spriteFrame || null));
+      const prompts: Record<Exclude<ToolMode, 'none'>, string> = {
+        water: '请选择要浇水的土地',
+        fert: '请选择要施肥的土地',
+        harvest: '请选择要采摘的土地',
+        shovel: '请选择要铲除作物的土地',
+      };
+      this.toast?.show(next === 'none' ? '已取消工具' : prompts[mode]);
     });
   }
 
@@ -191,12 +200,18 @@ export class GameRoot extends Component {
       this.landView.onToast = (message, duration) => this.toast?.show(message, duration);
       this.landView.onAction = action;
       this.landView.now = () => gameSync.serverNow();
+      this.landView.configureToolLayers(
+        this.findNode(root, 'ToolCursorLayer'),
+        this.findNode(root, 'ToolEffectLayer'),
+      );
     }
 
     const leftBar = this.findNode(root, 'LeftBar') || this.findNode(root, 'LefttBar');
     if (leftBar) {
       this.bindToolButton(leftBar, 'Water', 'water');
       this.bindToolButton(leftBar, 'Fertilizer', 'fert');
+      this.bindToolButton(leftBar, 'Harvest', 'harvest');
+      this.bindToolButton(leftBar, 'Shovel', 'shovel');
     }
 
     const backpackNode = this.backpackPanelNode || this.findNode(root, 'BackpackPanel');

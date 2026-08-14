@@ -186,7 +186,7 @@ export class ShopPanel extends Component {
     }
     this.normalizeDepth();
     if (this.goldLabel) {
-      this.goldLabel.string = `金币：${this.player.gold} 💰  ·  在售 ${list.length} 种`;
+      this.goldLabel.string = `金币：${this.player.gold} · 在售 ${list.length} 种`;
     }
     if (this.scrollView) {
       this.scrollView.scrollToTop(0);
@@ -212,7 +212,7 @@ export class ShopPanel extends Component {
 
   private async buy(def: ShopDef) {
     if (this.pendingItems.has(def.id)) return;
-    if (this.player.gold < def.price) { this.onToast('金币不足 💰'); return; }
+    if (this.player.gold < def.price) { this.onToast('金币不足'); return; }
     this.pendingItems.add(def.id);
     this.render();
     try {

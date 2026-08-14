@@ -13,6 +13,7 @@ assets/
 
 - `login` 场景 Canvas 挂 `LoginMain`；微信环境会自动调用 `wx.login`。
 - `farm` 场景 Canvas 挂 `GameRoot`；节点命名见 `scenes/farm.scene.md`。
+- 浇水、施肥、采摘、铲子的跟随图标与动画模板见 `scenes/tool-effects.setup.md`。
 - 请在 Cocos 编辑器用 `@property` 显式拖拽关键节点。代码中的按名查找只为兼容已有场景，不应成为新场景的主要绑定方式。
 
 ## API 地址

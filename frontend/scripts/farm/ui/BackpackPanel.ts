@@ -242,7 +242,7 @@ export class BackpackPanel extends Component {
   private showDetail(st: InventoryStack) {
     const h = Math.floor((Date.now() - st.acquired) / 3600000);
     const ago = h < 1 ? '刚刚' : (h < 24 ? h + '小时前' : Math.floor(h / 24) + '天前');
-    this.onToast(`【${CATEGORY_LABEL[st.category]}】${st.name} × ${st.count} · 回收价 💰${st.value} · 获得于 ${ago}`, 2.5);
+    this.onToast(`【${CATEGORY_LABEL[st.category]}】${st.name} × ${st.count} · 回收价 ${st.value} · 获得于 ${ago}`, 2.5);
   }
 
   private async sellItem(id: string) {

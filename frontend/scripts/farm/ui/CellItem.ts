@@ -50,7 +50,7 @@ export class CellItem extends Component {
       sellNode.on(Node.EventType.TOUCH_END, (e: EventTouch) => { e.propagationStopped = true; });
 
       const sellLb = sellNode.getComponentInChildren(Label);
-      if (sellLb) sellLb.string = '卖💰' + data.value;
+      if (sellLb) sellLb.string = '出售 ' + data.value;
     }
 
     // 点击格子看详情

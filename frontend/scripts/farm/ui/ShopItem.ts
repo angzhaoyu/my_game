@@ -39,13 +39,13 @@ export class ShopItem extends Component {
     // 价格
     const priceLb = priceNode ? (priceNode.getComponent(Label) || priceNode.getComponentInChildren(Label)) : null;
     if (priceLb) {
-      priceLb.string = '💰 ' + def.price;
+      priceLb.string = '价格 ' + def.price;
       priceLb.color = canBuy ? C_PRICE : C_POOR;
     }
 
     // 回收价
     const resaleLb = resaleNode ? (resaleNode.getComponent(Label) || resaleNode.getComponentInChildren(Label)) : null;
-    if (resaleLb) resaleLb.string = '回收💰' + def.value;
+    if (resaleLb) resaleLb.string = '回收 ' + def.value;
 
     // 购买按钮
     if (btnNode) {

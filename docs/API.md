@@ -89,6 +89,7 @@ Base URL：`https://<domain>/api/v1`。请求/响应 JSON，写游戏接口需 `
 | `water` | `plotId` | 已开发、服务端冷却 |
 | `fertilize` | `plotId`, `itemId` | 已开发、化肥类型与数量 |
 | `harvest` | `plotId` | 服务端结算后确实成熟 |
+| `shovel` | `plotId` | 已开发且存在作物；铲除后不返还种子 |
 
 `quantity` 必须为 1-99。成功返回更新后的完整玩家快照（通常不重复 catalog）、`message`、`commandId`。
 

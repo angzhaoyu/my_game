@@ -1,15 +1,10 @@
 /**
- * ui/LandView.ts —— 农场土地视图（挂在场景 lands 节点）
- *
- * 负责：
- *  - 按等级解锁显示地块（未解锁隐藏）
- *  - 按土地状态切换土地贴图 a/b/c/d
- *  - 在土地上叠加作物生长阶段贴图
- *  - 交互：开发、种植、浇水、施肥、收获
- *  - 浇水 / 施肥动画（土块弹跳 + 飘字 + 水珠/肥雾）
+ * 农场土地视图：渲染地块、处理四种左栏工具，并播放场景中配置的动画模板。
+ * 工具光标使用 70% 透明 Sprite 跟随鼠标/触摸；代码不再生成水滴、肥雾、飘字等动画。
  */
 import {
-  _decorator, Color, Component, Label, Layers, Node, resources, Sprite, SpriteFrame, tween, UITransform, Vec3,
+  _decorator, Animation, Component, EventMouse, EventTouch, input, Input, instantiate, Layers,
+  Node, resources, Sprite, SpriteFrame, UIOpacity, UITransform, Vec3,
 } from 'cc';
 import { LAND, fertAmountFor, plotsUnlockedAtLevel } from '../config/LandConfig';
 import { getCropDef } from '../config/CropConfig';
@@ -23,7 +18,30 @@ import type { GameCommandType } from '../../core/network/Contracts';
 
 const { ccclass } = _decorator;
 
-export type ToolMode = 'none' | 'water' | 'fert';
+export type ToolMode = 'none' | 'water' | 'fert' | 'harvest' | 'shovel';
+type ActiveTool = Exclude<ToolMode, 'none'>;
+
+const CURSOR_OPACITY = Math.round(255 * 0.7);
+const CURSOR_RESOURCE: Record<ActiveTool, string> = {
+  water: 'farm/tools/cursor_water/spriteFrame',
+  fert: 'farm/tools/cursor_fertilizer/spriteFrame',
+  harvest: 'farm/tools/cursor_harvest/spriteFrame',
+  shovel: 'farm/tools/cursor_shovel/spriteFrame',
+};
+const EFFECT_TEMPLATE: Record<ActiveTool, string> = {
+  water: 'WaterEffectTemplate',
+  fert: 'FertilizerEffectTemplate',
+  harvest: 'HarvestEffectTemplate',
+  shovel: 'ShovelEffectTemplate',
+};
+
+interface PlotView {
+  id: number;
+  node: Node;
+  land: Sprite | null;
+  cropNode: Node;
+  cropSprite: Sprite | null;
+}
 
 @ccclass('LandView')
 export class LandView extends Component {
@@ -35,19 +53,25 @@ export class LandView extends Component {
   onAction: GameActionHandler = async () => ({ ok: false, message: '网络服务尚未就绪' });
   now: () => number = () => Date.now();
 
-  private plots: { id: number; node: Node; land: Sprite | null; cropNode: Node; cropSprite: Sprite | null }[] = [];
+  /** 由 GameRoot 从 Camera/ToolCursorLayer 与 Camera/ToolEffectLayer 注入。 */
+  toolCursorLayer: Node | null = null;
+  toolEffectLayer: Node | null = null;
+
+  private plots: PlotView[] = [];
   private busyPlots = new Set<number>();
   private picker: FarmPicker | null = null;
   private lastKeys: Record<number, string> = {};
-
   private tool: ToolMode = 'none';
-  private waterCooldown = 0; // 时间戳
+  private waterCooldown = 0;
+  private cursorNode: Node | null = null;
+  private hasPointerPosition = false;
+  private pointerWorldPosition = new Vec3();
+  private suppliedCursorFrame: SpriteFrame | null = null;
 
   onLoad() {
-    this.node.on(Node.EventType.TOUCH_END, (e) => { e.propagationStopped = true; });
+    this.node.on(Node.EventType.TOUCH_END, (event) => { event.propagationStopped = true; });
     this.buildPlotMap();
 
-    // 挂一个共用选择弹窗
     let pickerNode = this.node.getChildByName('FarmPicker');
     if (!pickerNode) {
       pickerNode = new Node('FarmPicker');
@@ -55,6 +79,18 @@ export class LandView extends Component {
       this.node.addChild(pickerNode);
     }
     this.picker = pickerNode.getComponent(FarmPicker) || pickerNode.addComponent(FarmPicker);
+
+    input.on(Input.EventType.MOUSE_MOVE, this.onMouseMove, this);
+    input.on(Input.EventType.TOUCH_START, this.onTouchMove, this);
+    input.on(Input.EventType.TOUCH_MOVE, this.onTouchMove, this);
+  }
+
+  onDestroy() {
+    input.off(Input.EventType.MOUSE_MOVE, this.onMouseMove, this);
+    input.off(Input.EventType.TOUCH_START, this.onTouchMove, this);
+    input.off(Input.EventType.TOUCH_MOVE, this.onTouchMove, this);
+    this.cursorNode?.destroy();
+    this.cursorNode = null;
   }
 
   update() {
@@ -63,10 +99,20 @@ export class LandView extends Component {
     this.render();
   }
 
-  // ---------- 外部调用 ----------
+  configureToolLayers(cursorLayer: Node | null, effectLayer: Node | null): void {
+    if (this.cursorNode && cursorLayer && this.cursorNode.parent !== cursorLayer) {
+      this.cursorNode.destroy();
+      this.cursorNode = null;
+    }
+    this.toolCursorLayer = cursorLayer;
+    this.toolEffectLayer = effectLayer;
+    this.refreshToolCursor();
+  }
 
-  setTool(mode: ToolMode) {
+  setTool(mode: ToolMode, leftBarIcon: SpriteFrame | null = null) {
     this.tool = mode;
+    this.suppliedCursorFrame = mode === 'none' ? null : leftBarIcon;
+    this.refreshToolCursor();
   }
 
   get currentTool(): ToolMode {
@@ -76,18 +122,16 @@ export class LandView extends Component {
   render() {
     if (!this.farm || !this.player) return;
     const unlocked = plotsUnlockedAtLevel(this.player.level);
-    for (const p of this.plots) {
-      const visible = p.id <= unlocked;
-      p.node.active = visible;
-      if (!visible) { delete this.lastKeys[p.id]; continue; }
-      const plot = this.farm.getPlot(p.id);
+    for (const view of this.plots) {
+      const visible = view.id <= unlocked;
+      view.node.active = visible;
+      if (!visible) { delete this.lastKeys[view.id]; continue; }
+      const plot = this.farm.getPlot(view.id);
       if (!plot) continue;
 
       const state = this.farm.landState(plot);
       const col = ((plot.id - 1) % LAND.PLOTS_PER_ROW) + 1;
       const landPath = `farm/lands_${state}1/locked_${col}${state}/spriteFrame`;
-
-      // 作物图标
       let cropIcon = '';
       let cropVisible = false;
       if (plot.crop) {
@@ -99,41 +143,129 @@ export class LandView extends Component {
         }
       }
 
-      // 仅当关键信息变化才重载贴图
       const key = `${state}|${cropVisible}|${cropIcon}`;
-      if (this.lastKeys[p.id] === key) continue;
-      this.lastKeys[p.id] = key;
-
-      if (p.land) loadFrame(landPath, p.land);
-      if (p.cropNode) p.cropNode.active = cropVisible;
-      if (cropVisible && p.cropSprite) {
-        loadFrame(`textures/items/${cropIcon}/spriteFrame`, p.cropSprite, () => {
-          loadFrame(`farm/crop/${cropIcon}/spriteFrame`, p.cropSprite!);
+      if (this.lastKeys[view.id] === key) continue;
+      this.lastKeys[view.id] = key;
+      if (view.land) loadFrame(landPath, view.land);
+      view.cropNode.active = cropVisible;
+      if (cropVisible && view.cropSprite) {
+        loadFrame(`textures/items/${cropIcon}/spriteFrame`, view.cropSprite, () => {
+          loadFrame(`farm/crop/${cropIcon}/spriteFrame`, view.cropSprite!);
         });
       }
     }
   }
 
-  // ---------- 交互 ----------
+  // ---------- 工具光标 ----------
 
-  private onPlotTouch(p: { id: number; node: Node }) {
-    if (this.busyPlots.has(p.id)) { this.onToast('操作正在同步，请稍候'); return; }
-    const plot = this.farm.getPlot(p.id);
-    if (!plot || !plot.developed) { this.tryDevelop(p.id); return; }
+  private onMouseMove(event: EventMouse): void {
+    const point = event.getUILocation();
+    this.moveToolCursor(point.x, point.y);
+  }
 
-    // 工具模式优先
-    if (this.tool === 'water') { this.tryWater(p.id); return; }
-    if (this.tool === 'fert') { this.openFertilizer(p.id); return; }
+  private onTouchMove(event: EventTouch): void {
+    const point = event.getUILocation();
+    this.moveToolCursor(point.x, point.y);
+  }
 
-    // 默认交互
-    if (plot.harvestable) { this.tryHarvest(p.id); return; }
+  private moveToolCursor(worldX: number, worldY: number): void {
+    this.hasPointerPosition = true;
+    this.pointerWorldPosition.set(worldX, worldY, 0);
+    if (this.tool === 'none') return;
+    const cursor = this.ensureCursorNode();
+    if (!cursor) return;
+    this.positionCursor(cursor);
+    cursor.active = true;
+  }
+
+  private positionCursor(cursor: Node): void {
+    const layer = cursor.parent;
+    const transform = layer?.getComponent(UITransform) || layer?.addComponent(UITransform);
+    if (transform) cursor.setPosition(transform.convertToNodeSpaceAR(this.pointerWorldPosition));
+  }
+
+  private refreshToolCursor(): void {
+    const cursor = this.ensureCursorNode();
+    if (!cursor) return;
+    cursor.active = this.tool !== 'none' && this.hasPointerPosition;
+    if (this.tool === 'none') return;
+    if (this.hasPointerPosition) this.positionCursor(cursor);
+
+    const selected = this.tool;
+    const sprite = cursor.getComponent(Sprite) || cursor.addComponent(Sprite);
+    sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+    sprite.spriteFrame = this.suppliedCursorFrame;
+    if (this.suppliedCursorFrame) return;
+    resources.load(CURSOR_RESOURCE[selected], SpriteFrame, (error, frame) => {
+      if (!error && frame && this.tool === selected && this.cursorNode?.isValid) {
+        sprite.spriteFrame = frame;
+      }
+    });
+  }
+
+  private ensureCursorNode(): Node | null {
+    const layer = this.ensureLayer('ToolCursorLayer', this.toolCursorLayer);
+    if (!layer) return null;
+    this.toolCursorLayer = layer;
+    if (this.cursorNode?.isValid) return this.cursorNode;
+
+    const cursor = new Node('ToolCursor');
+    cursor.layer = Layers.Enum.UI_2D;
+    cursor.addComponent(UITransform).setContentSize(72, 72);
+    cursor.addComponent(Sprite).sizeMode = Sprite.SizeMode.CUSTOM;
+    cursor.addComponent(UIOpacity).opacity = CURSOR_OPACITY;
+    cursor.active = false;
+    layer.addChild(cursor);
+    this.cursorNode = cursor;
+    return cursor;
+  }
+
+  private ensureLayer(name: string, configured: Node | null): Node | null {
+    if (configured?.isValid) return configured;
+    const parent = this.node.parent;
+    if (!parent) return null;
+    let layer = parent.getChildByName(name);
+    if (!layer) {
+      layer = new Node(name);
+      layer.layer = Layers.Enum.UI_2D;
+      layer.addComponent(UITransform);
+      parent.addChild(layer);
+    }
+    return layer;
+  }
+
+  // ---------- 地块交互 ----------
+
+  private onPlotTouch(view: { id: number; node: Node }) {
+    if (this.busyPlots.has(view.id)) { this.onToast('操作正在同步，请稍候'); return; }
+    const plot = this.farm.getPlot(view.id);
+    if (!plot) return;
+
+    if (this.tool !== 'none') {
+      if (!plot.developed) { this.onToast('请先开发这块土地'); return; }
+      if (this.tool === 'water') { void this.tryWater(view.id); return; }
+      if (this.tool === 'fert') { this.openFertilizer(view.id); return; }
+      if (this.tool === 'harvest') {
+        if (!plot.harvestable) { this.onToast('这块地还没有可采摘的作物'); return; }
+        void this.tryHarvest(view.id);
+        return;
+      }
+      if (this.tool === 'shovel') {
+        if (!plot.crop) { this.onToast('这块地没有需要铲除的作物'); return; }
+        void this.tryShovel(view.id);
+        return;
+      }
+    }
+
+    if (!plot.developed) { void this.tryDevelop(view.id); return; }
+    if (plot.harvestable) { void this.tryHarvest(view.id); return; }
     if (plot.crop) { this.showCropStatus(plot); return; }
-    this.openSeedPicker(p.id);
+    this.openSeedPicker(view.id);
   }
 
   private async tryDevelop(id: number) {
     if (this.player.gold < LAND.DEVELOP_COST) {
-      this.onToast('金币不足 💰，无法开发土地');
+      this.onToast('金币不足，无法开发土地');
       return;
     }
     const result = await this.perform(id, 'develop_plot', { plotId: id });
@@ -142,25 +274,24 @@ export class LandView extends Component {
 
   private openSeedPicker(id: number) {
     if (!this.picker || this.busyPlots.has(id)) return;
-    const opts = this.seedOptions();
-    if (opts.length === 0) { this.onToast('背包里没有种子，去商店买吧 🌱'); return; }
-    this.picker.open('选择种子', opts, (key) => { void this.doPlant(id, key); });
+    const options = this.seedOptions();
+    if (options.length === 0) { this.onToast('背包里没有种子，请先去商店购买'); return; }
+    this.picker.open('选择种子', options, (cropId) => { void this.doPlant(id, cropId); });
   }
 
   private seedOptions(): (import('./FarmPicker').PickerOption & { key: string })[] {
-    const seeds = this.inventory.query({ category: 'seed' });
-    const out: (import('./FarmPicker').PickerOption & { key: string })[] = [];
-    for (const seed of seeds) {
+    const output: (import('./FarmPicker').PickerOption & { key: string })[] = [];
+    for (const seed of this.inventory.query({ category: 'seed' })) {
       const cropId = (seed.icon || '').replace(/^seed_/, '');
       const def = getCropDef(cropId);
-      if (def) out.push({ key: def.id, name: def.name, icon: seed.icon, sub: `x${seed.count}` });
+      if (def) output.push({ key: def.id, name: def.name, icon: seed.icon, sub: `x${seed.count}` });
     }
-    return out;
+    return output;
   }
 
   private async doPlant(id: number, cropId: string) {
     const result = await this.perform(id, 'plant', { plotId: id, cropId });
-    if (result.ok) this.onToast(`${result.message} 🌱，记得浇水施肥`);
+    if (result.ok) this.onToast(`${result.message}，记得浇水施肥`);
   }
 
   private async tryWater(id: number) {
@@ -169,16 +300,16 @@ export class LandView extends Component {
     this.waterCooldown = now + LAND.WATER_COOLDOWN_MS;
     const result = await this.perform(id, 'water', { plotId: id });
     if (result.ok) {
-      this.animateWater(id, LAND.WATER_PER_USE);
+      this.playProvidedEffect('water', id);
       this.onToast(result.message);
     }
   }
 
   private openFertilizer(id: number) {
     if (!this.picker || this.busyPlots.has(id)) return;
-    const opts = this.fertilizerOptions();
-    if (opts.length === 0) { this.onToast('背包里没有化肥，去商店买吧 🧪'); return; }
-    this.picker.open('选择化肥', opts, (key) => { void this.doFertilize(id, key); });
+    const options = this.fertilizerOptions();
+    if (options.length === 0) { this.onToast('背包里没有化肥，请先去商店购买'); return; }
+    this.picker.open('选择化肥', options, (itemId) => { void this.doFertilize(id, itemId); });
   }
 
   private fertilizerOptions(): (import('./FarmPicker').PickerOption & { key: string })[] {
@@ -186,23 +317,32 @@ export class LandView extends Component {
       key: item.id,
       name: item.name,
       icon: item.icon,
-      sub: `+${fertAmountFor(item.icon)} 养分`,
+      sub: `增加 ${fertAmountFor(item.icon)} 养分`,
     }));
   }
 
   private async doFertilize(id: number, itemId: string) {
-    const item = this.inventory.findByItemId(itemId);
-    const amount = item ? fertAmountFor(item.icon) : 0;
     const result = await this.perform(id, 'fertilize', { plotId: id, itemId });
     if (result.ok) {
-      this.animateFert(id, amount);
+      this.playProvidedEffect('fert', id);
       this.onToast(result.message);
     }
   }
 
   private async tryHarvest(id: number) {
     const result = await this.perform(id, 'harvest', { plotId: id });
-    if (result.ok) this.onToast(result.message, 2.2);
+    if (result.ok) {
+      this.playProvidedEffect('harvest', id);
+      this.onToast(result.message, 2.2);
+    }
+  }
+
+  private async tryShovel(id: number) {
+    const result = await this.perform(id, 'shovel', { plotId: id });
+    if (result.ok) {
+      this.playProvidedEffect('shovel', id);
+      this.onToast(result.message);
+    }
   }
 
   private async perform(id: number, type: GameCommandType, payload: Record<string, unknown>) {
@@ -221,80 +361,52 @@ export class LandView extends Component {
     const def = getCropDef(plot.crop!);
     if (!def) return;
     const hours = Math.max(0, def.duration - plot.progress * def.duration);
-    const w = Math.round(plot.water), f = Math.round(plot.fert);
-    this.onToast(`${def.name}：水${w} 肥${f} · 约${hours.toFixed(1)}h成熟`, 2);
+    this.onToast(
+      `${def.name}：水分 ${Math.round(plot.water)}，肥力 ${Math.round(plot.fert)}，约 ${hours.toFixed(1)} 小时成熟`,
+      2,
+    );
   }
 
-  // ---------- 动画 ----------
+  // ---------- 用户提供的 Animation 模板 ----------
 
-  private animateWater(id: number, amount: number) {
-    const p = this.plots.find(x => x.id === id);
-    if (!p) return;
-    this.bounce(p.node);
-    this.floatText(p.node, `+${amount} 💧`, new Color(90, 180, 255, 255));
+  private playProvidedEffect(tool: ActiveTool, plotId: number): void {
+    const plot = this.plots.find(item => item.id === plotId);
+    const layer = this.ensureLayer('ToolEffectLayer', this.toolEffectLayer);
+    if (!plot || !layer) return;
+    this.toolEffectLayer = layer;
+    if (this.toolCursorLayer?.parent) {
+      this.toolCursorLayer.setSiblingIndex(this.toolCursorLayer.parent.children.length - 1);
+    }
 
-    // 水珠从土上飞起
-    const drop = this.makeFxNode('droplet', 26, 26, p.node, 0, 20);
-    loadFrame('farm/effect/water_drop/spriteFrame', drop.sprite, () => {
-      loadFrame('farm/effect/water_drop', drop.sprite!);
-    });
-    tween(drop.node).to(0.5, { position: new Vec3(0, 46, 0) }).start();
-    tween(drop.node).delay(0.45).to(0.2, { angle: 0 }).call(() => drop.node.destroy()).start();
+    const templateName = EFFECT_TEMPLATE[tool];
+    const template = layer.getChildByName(templateName);
+    if (!template) {
+      console.warn(`[LandView] 缺少场景动画模板 Camera/ToolEffectLayer/${templateName}`);
+      return;
+    }
+
+    const effect = instantiate(template);
+    effect.name = `${templateName}_Playing`;
+    layer.addChild(effect);
+    effect.setWorldPosition(plot.node.worldPosition);
+    effect.active = true;
+
+    const animation = effect.getComponent(Animation) || effect.getComponentInChildren(Animation);
+    const clip = animation?.defaultClip || animation?.clips[0] || null;
+    if (!animation || !clip) {
+      console.warn(`[LandView] ${templateName} 需要 Animation 组件和默认 AnimationClip`);
+      effect.destroy();
+      return;
+    }
+
+    if (!animation.defaultClip) animation.defaultClip = clip;
+    animation.play();
+    this.scheduleOnce(() => {
+      if (effect.isValid) effect.destroy();
+    }, Math.max(0.05, clip.duration + 0.05));
   }
 
-  private animateFert(id: number, amount: number) {
-    const p = this.plots.find(x => x.id === id);
-    if (!p) return;
-    this.bounce(p.node);
-    this.floatText(p.node, `+${amount} 🧪`, new Color(255, 190, 90, 255));
-
-    const puff = this.makeFxNode('puff', 40, 40, p.node, 0, 10);
-    loadFrame('farm/effect/fert_puff/spriteFrame', puff.sprite, () => {
-      loadFrame('farm/effect/fert_puff', puff.sprite!);
-    });
-    tween(puff.node).to(0.4, { scale: new Vec3(1.6, 1.6, 1) }).start();
-    tween(puff.node).delay(0.4).to(0.2, { angle: 0 }).call(() => puff.node.destroy()).start();
-  }
-
-  private bounce(node: Node) {
-    const pos = node.position.clone();
-    tween(node).stop();
-    tween(node)
-      .to(0.08, { scale: new Vec3(1.06, 0.94, 1) })
-      .to(0.14, { scale: new Vec3(0.98, 1.03, 1) })
-      .to(0.08, { scale: new Vec3(1, 1, 1) })
-      .start();
-    node.setPosition(pos);
-  }
-
-  private floatText(parent: Node, text: string, color: Color) {
-    const n = new Node('float');
-    n.layer = Layers.Enum.UI_2D;
-    n.addComponent(UITransform).setContentSize(140, 30);
-    n.setPosition(0, 34);
-    parent.addChild(n);
-    const lb = n.addComponent(Label);
-    lb.string = text;
-    lb.fontSize = 18;
-    lb.color = color;
-    lb.isBold = true;
-    lb.horizontalAlign = Label.HorizontalAlign.CENTER;
-    lb.verticalAlign = Label.VerticalAlign.CENTER;
-    tween(n).to(0.7, { position: new Vec3(0, 62, 0) }).call(() => n.destroy()).start();
-  }
-
-  private makeFxNode(name: string, w: number, h: number, parent: Node, x: number, y: number) {
-    const n = new Node(name);
-    n.layer = Layers.Enum.UI_2D;
-    n.addComponent(UITransform).setContentSize(w, h);
-    n.setPosition(x, y);
-    const sp = n.addComponent(Sprite);
-    sp.sizeMode = Sprite.SizeMode.CUSTOM;
-    parent.addChild(n);
-    return { node: n, sprite: sp };
-  }
-
-  // ---------- 场景结构 ----------
+  // ---------- 场景地块映射 ----------
 
   private buildPlotMap() {
     this.plots = [];
@@ -308,7 +420,6 @@ export class LandView extends Component {
 
         const land = plotNode.getComponent(Sprite) || plotNode.addComponent(Sprite);
         land.sizeMode = Sprite.SizeMode.CUSTOM;
-
         let cropNode = plotNode.getChildByName('crop');
         if (!cropNode) {
           cropNode = new Node('crop');
@@ -320,26 +431,22 @@ export class LandView extends Component {
         const cropSprite = cropNode.getComponent(Sprite) || cropNode.addComponent(Sprite);
         cropSprite.sizeMode = Sprite.SizeMode.CUSTOM;
 
-        const idCapture = id;
+        const plotId = id;
         plotNode.off(Node.EventType.TOUCH_END);
-        plotNode.on(Node.EventType.TOUCH_END, (e) => {
-          e.propagationStopped = true;
-          this.onPlotTouch(this.plots.find(x => x.id === idCapture)!);
+        plotNode.on(Node.EventType.TOUCH_END, (event) => {
+          event.propagationStopped = true;
+          const target = this.plots.find(item => item.id === plotId);
+          if (target) this.onPlotTouch(target);
         });
-
         this.plots.push({ id, node: plotNode, land, cropNode, cropSprite });
       }
     }
   }
 }
 
-/** 从资源加载 SpriteFrame（带兜底） */
-function loadFrame(path: string, sp: Sprite, fallback?: () => void): void {
-  resources.load(path, SpriteFrame, (err, sf) => {
-    if (!err && sf && sp) {
-      sp.spriteFrame = sf;
-    } else if (fallback) {
-      fallback();
-    }
+function loadFrame(path: string, sprite: Sprite, fallback?: () => void): void {
+  resources.load(path, SpriteFrame, (error, frame) => {
+    if (!error && frame && sprite?.isValid) sprite.spriteFrame = frame;
+    else fallback?.();
   });
 }

@@ -23,7 +23,8 @@ export type GameCommandType =
   | 'plant'
   | 'water'
   | 'fertilize'
-  | 'harvest';
+  | 'harvest'
+  | 'shovel';
 
 export interface RemoteProfile {
   id: number;

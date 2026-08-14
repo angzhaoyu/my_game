@@ -41,6 +41,16 @@ class DomainTest(unittest.TestCase):
         self.assertEqual(state.plots[1].crop_id, "wheat")
         self.assertNotIn("seed_wheat", state.inventory)
 
+    def test_shovel_removes_crop_without_client_state_upload(self):
+        state = self.state()
+        state.plots[1].developed = True
+        state.plots[1].crop_id = "wheat"
+        state.plots[1].progress = 0.5
+        result = GameEngine().execute(state, "shovel", {"plotId": 1}, HOUR_MS)
+        self.assertIn("小麦", result.message)
+        self.assertIsNone(state.plots[1].crop_id)
+        self.assertEqual(state.plots[1].progress, 0)
+
     def test_password_hash_is_salted(self):
         one = hash_password("correct horse battery staple")
         two = hash_password("correct horse battery staple")
